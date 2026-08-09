@@ -592,3 +592,24 @@ func (f *a2aFakeModel) GenerateContent(_ context.Context, _ *adkmodel.LLMRequest
 		}, nil)
 	}
 }
+
+// TestListIncludesPersonality 验证列表端点也带性格模板（与单只查询一致）。
+func TestListIncludesPersonality(t *testing.T) {
+	env := setup(t)
+	status, body := doJSON(t, "POST", env.srv.URL+"/v1/pets", `{"name":"球球","species":"dog","personality":"傲娇"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d", status)
+	}
+	status, body = doJSON(t, "GET", env.srv.URL+"/v1/pets", "")
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d", status)
+	}
+	pets, _ := body["pets"].([]any)
+	if len(pets) != 1 {
+		t.Fatalf("pets = %v", body)
+	}
+	first, _ := pets[0].(map[string]any)
+	if first["personality"] != "tsundere" {
+		t.Fatalf("list personality = %v", first["personality"])
+	}
+}

@@ -160,7 +160,11 @@ func (s *Server) handleListPets(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]petView, 0, len(pets))
 	for _, p := range pets {
-		views = append(views, view(p))
+		v := view(p)
+		if per, err := s.fs.SoulTemplate(p.ID); err == nil {
+			v.Personality = per
+		}
+		views = append(views, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pets": views})
 }

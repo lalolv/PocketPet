@@ -18,10 +18,10 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"pocketpet/internal/config"
-	"pocketpet/internal/llm"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/plugin"
+	"github.com/lalolv/PocketPet/internal/config"
+	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/plugin"
 )
 
 // fakeModel 是测试用的 model.LLM：记录最近一次请求（指令与工具声明），

@@ -4,9 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // StageSync 订阅领域事件，在 pet.stage_up 时把宠物的最新阶段写回 PET.md。

@@ -3,7 +3,7 @@ package agent
 import (
 	"fmt"
 
-	"pocketpet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/pet"
 )
 
 // deadLine 是宠物死亡后对话的固定回应。

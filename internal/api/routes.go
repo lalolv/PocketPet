@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"pocketpet/internal/plugin"
+	"github.com/lalolv/PocketPet/internal/plugin"
 )
 
 // Route 是插件路由类型（定义在契约层 internal/plugin，此处为别名，

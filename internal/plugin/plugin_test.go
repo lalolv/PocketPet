@@ -8,8 +8,8 @@ import (
 
 	adktool "google.golang.org/adk/v2/tool"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // fakePlugin 实现全部能力接口，用于验证 Registry 的发现与收集。

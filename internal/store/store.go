@@ -15,7 +15,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"pocketpet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/pet"
 )
 
 // ErrNotFound 表示请求的宠物不存在。

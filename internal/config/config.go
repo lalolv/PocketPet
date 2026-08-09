@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"pocketpet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/llm"
 )
 
 // 环境变量名。

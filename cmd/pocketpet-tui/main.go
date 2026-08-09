@@ -10,7 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"pocketpet/internal/tui"
+	"github.com/lalolv/PocketPet/internal/tui"
 )
 
 func main() {

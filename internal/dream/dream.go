@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"pocketpet/internal/llm"
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // 整理参数与护栏常量。

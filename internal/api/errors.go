@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // 业务错误码。

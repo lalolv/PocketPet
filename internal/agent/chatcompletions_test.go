@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"pocketpet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/llm"
 )
 
 // TestChatViaOpenAIChatProvider 是 openai-chat provider 的端到端集成：

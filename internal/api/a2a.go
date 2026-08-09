@@ -15,8 +15,8 @@ import (
 	adka2a "google.golang.org/adk/v2/server/adka2a/v2"
 	"google.golang.org/adk/v2/session"
 
-	"pocketpet/internal/llm"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // a2aPrefix 是 A2A 端点的 URL 前缀；宠物 A2A 暴露在 /a2a/pets/{id}/ 下：

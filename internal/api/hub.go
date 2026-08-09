@@ -3,7 +3,7 @@ package api
 import (
 	"sync"
 
-	"pocketpet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/pet"
 )
 
 // Hub 是 SSE 事件推送中心：按 petID 维护订阅者，Publish 非阻塞广播。

@@ -16,7 +16,7 @@ import (
 	"google.golang.org/adk/v2/model/gemini"
 	"google.golang.org/adk/v2/model/openaimodel"
 
-	"pocketpet/internal/llm/chatmodel"
+	"github.com/lalolv/PocketPet/internal/llm/chatmodel"
 )
 
 // 支持的 provider 类型。

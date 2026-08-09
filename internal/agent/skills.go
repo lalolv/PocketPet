@@ -18,8 +18,8 @@ import (
 	"google.golang.org/adk/v2/tool/skilltoolset"
 	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 
-	"pocketpet/internal/config"
-	"pocketpet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/config"
+	"github.com/lalolv/PocketPet/internal/petfs"
 )
 
 // skillSetSource 实现 skill.Source：按优先级（宠物私有在前、全局在后）逐目录扫描，

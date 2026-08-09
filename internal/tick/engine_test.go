@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 var t0 = time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)

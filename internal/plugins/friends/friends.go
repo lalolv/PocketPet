@@ -22,11 +22,11 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"pocketpet/internal/api"
-	"pocketpet/internal/pet"
-	"pocketpet/internal/plugin"
-	"pocketpet/internal/plugins/adventure"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/api"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/plugin"
+	"github.com/lalolv/PocketPet/internal/plugins/adventure"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // 插件产生的领域事件。

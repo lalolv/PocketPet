@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"pocketpet/internal/agent"
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/store"
-	"pocketpet/internal/tick"
+	"github.com/lalolv/PocketPet/internal/agent"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/store"
+	"github.com/lalolv/PocketPet/internal/tick"
 )
 
 // sseReplayCount 是 SSE 连接建立时回放的历史事件条数。

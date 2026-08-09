@@ -17,10 +17,10 @@ import (
 	adkagent "google.golang.org/adk/v2/agent"
 	adktool "google.golang.org/adk/v2/tool"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/store"
-	"pocketpet/internal/tick"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/store"
+	"github.com/lalolv/PocketPet/internal/tick"
 )
 
 // Plugin 是核心接口：所有插件必须实现。

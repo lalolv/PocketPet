@@ -17,12 +17,12 @@ import (
 
 	adkmodel "google.golang.org/adk/v2/model"
 
-	"pocketpet/internal/agent"
-	"pocketpet/internal/llm"
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/store"
-	"pocketpet/internal/tick"
+	"github.com/lalolv/PocketPet/internal/agent"
+	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/store"
+	"github.com/lalolv/PocketPet/internal/tick"
 )
 
 var t0 = time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)

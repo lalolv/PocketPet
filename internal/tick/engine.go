@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/store"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/store"
 )
 
 // EventSink 接收领域事件（如 SSE 推送 hub）。

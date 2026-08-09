@@ -11,8 +11,8 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
 )
 
 // recallDays 是 recall 工具回看的日记天数。

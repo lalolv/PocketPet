@@ -6,8 +6,8 @@ import (
 
 	adkmodel "google.golang.org/adk/v2/model"
 
-	"pocketpet/internal/llm"
-	"pocketpet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/petfs"
 )
 
 // TestNamedProviderResolution 验证 AGENT.md provider 字段的解析规则：

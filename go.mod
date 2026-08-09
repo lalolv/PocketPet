@@ -1,4 +1,4 @@
-module pocketpet
+module github.com/lalolv/PocketPet
 
 go 1.26.5
 

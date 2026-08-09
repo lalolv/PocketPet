@@ -22,11 +22,11 @@ import (
 	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
 
-	"pocketpet/internal/config"
-	"pocketpet/internal/llm"
-	"pocketpet/internal/pet"
-	"pocketpet/internal/petfs"
-	"pocketpet/internal/tick"
+	"github.com/lalolv/PocketPet/internal/config"
+	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/tick"
 )
 
 // runner 与会话的固定标识：每只宠物一个 runner、一条主会话（进程内工作记忆）。

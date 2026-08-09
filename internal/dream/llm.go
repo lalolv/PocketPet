@@ -15,7 +15,7 @@ import (
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 
-	"pocketpet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/llm"
 )
 
 // ErrBadReflectOutput 表示 LLM 的整理输出无法解析为约定的 JSON。

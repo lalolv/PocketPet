@@ -9,6 +9,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	google.golang.org/adk/v2 v2.1.0
 	google.golang.org/genai v1.63.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.56.0
 )
 
@@ -71,7 +72,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260511170946-3700d4141b60 // indirect
 	google.golang.org/grpc v1.81.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

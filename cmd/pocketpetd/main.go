@@ -1,12 +1,12 @@
 // pocketpetd 是 PocketPet 的后端守护进程。
-// M2（宠物 Agent）：在 M1 数值内核之上叠加 petfs 文件体系、PetAgent
-// （第一人称对话 + 自我行为工具 + remember/recall）与 LLM provider 工厂；
+// 配置：YAML 配置文件 + 环境变量覆盖（启动参数 > env > 文件 > 默认值）；
 // 未配置 LLM 时 chat 走性格化降级文案，养成闭环不受影响。
 package main
 
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,10 +29,24 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
-	llmCfg := llm.FromEnv()
+	configPath := flag.String("config", "", "YAML 配置文件路径（默认探测 ./pocketpet.yaml、./configs/pocketpet.yaml）")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("load config failed", "err", err)
+		os.Exit(1)
+	}
+	llmResolver, err := llm.NewResolver(cfg.LLMProviders, cfg.LLMDefault, llm.FromEnv())
+	if err != nil {
+		slog.Error("load llm config failed", "err", err)
+		os.Exit(1)
+	}
+	llmCfg := llmResolver.Default()
+
 	slog.Info("starting pocketpetd",
 		"listen", cfg.ListenAddr,
+		"config", orNone(cfg.ConfigPath),
 		"tick_interval", cfg.TickInterval,
 		"offline_max", cfg.OfflineMax,
 		"db", cfg.DBPath,
@@ -42,7 +56,7 @@ func main() {
 	)
 	if !llmCfg.Configured() {
 		slog.Info("llm not configured, chat will use personality fallback lines " +
-			"(set POCKETPET_LLM_PROVIDER/MODEL/API_KEY to enable real LLM chat)")
+			"(set POCKETPET_LLM_* env or llm.providers in config file to enable real LLM chat)")
 	}
 
 	st, err := store.Open(cfg.DBPath)
@@ -67,6 +81,7 @@ func main() {
 	// + 插件 EventSubscriber。
 	stageSync := agent.NewStageSync(pfs, st)
 	organizer := dream.NewOrganizer(pfs, st, llmCfg)
+	organizer.Resolver = llmResolver
 	sink := tick.MultiSink{hub, stageSync, organizer}
 	sink = append(sink, registry.EventSinks()...)
 	engine := tick.NewEngine(st, sink, cfg.TickInterval, cfg.OfflineMax, pet.RealClock{})
@@ -85,6 +100,7 @@ func main() {
 		SkillsDir:  cfg.SkillsDir,
 		MCPServers: cfg.MCPServers,
 		ExtraTools: registry.Tools(),
+		Resolver:   llmResolver,
 	})
 	server := api.NewServer(st, engine, hub, pfs, petAgent)
 	for _, pr := range registry.Routes() {

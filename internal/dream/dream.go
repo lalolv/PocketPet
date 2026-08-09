@@ -75,6 +75,8 @@ type Organizer struct {
 	// Reflector 为 nil 时按 LLM 配置（全局 + AGENT.md 覆盖）惰性构造 LLMReflector，
 	// 配置缺失则静默跳过整理。测试注入 fake。
 	Reflector Reflector
+	// Resolver 是命名 provider 解析器（YAML 配置体系）；nil 时以 cfg 走单 provider 兼容路径。
+	Resolver *llm.Resolver
 	// Now 返回当前时间（日记命名、事件时间戳）；nil 时用 time.Now。测试注入假时钟。
 	Now func() time.Time
 
@@ -149,16 +151,22 @@ func (o *Organizer) Organize(ctx context.Context, petID string) error {
 	return nil
 }
 
-// resolveCfg 解析该宠物的有效 LLM 配置：全局配置 ← AGENT.md 覆盖。
+// resolveCfg 解析该宠物的有效 LLM 配置：有 Resolver 走命名 provider 解析
+// （名字优先、类型名回退），否则走单 provider 兼容路径（全局配置 ← AGENT.md 覆盖）。
 func (o *Organizer) resolveCfg(petID string) llm.ProviderConfig {
+	var spec petfs.AgentSpec
+	if s, err := o.fs.AgentSpec(petID); err == nil {
+		spec = s
+	}
+	if o.Resolver != nil {
+		return o.Resolver.Resolve(spec.Provider, spec.Model)
+	}
 	cfg := o.cfg
-	if spec, err := o.fs.AgentSpec(petID); err == nil {
-		if spec.Provider != "" {
-			cfg.Provider = llm.NormalizeProvider(spec.Provider)
-		}
-		if spec.Model != "" {
-			cfg.Model = spec.Model
-		}
+	if spec.Provider != "" {
+		cfg.Provider = llm.NormalizeProvider(spec.Provider)
+	}
+	if spec.Model != "" {
+		cfg.Model = spec.Model
 	}
 	return cfg
 }

@@ -1,0 +1,41 @@
+# PocketPet 配置文件示例。复制为 pocketpet.yaml（仓库根）或直接用 -config 指定。
+# 优先级：启动参数 > 环境变量 > 本文件 > 默认值。
+# 真实 pocketpet.yaml 已在 .gitignore 中（不要提交含密钥引用的个人配置）。
+
+server:
+  listen: ":8080"
+
+data_dir: ./data          # 数据根目录：SQLite 与宠物文件（pets/<id>/）
+skills_dir: ./skills      # 全局技能目录
+
+tick:
+  interval_seconds: 60        # tick 结算间隔
+  offline_catchup_max_hours: 24  # 离线补算时长上限
+
+llm:
+  # default 引用 providers 里的名字；缺省则回退 env 单 provider 模式（POCKETPET_LLM_*）。
+  default: deepseek
+  providers:
+    deepseek:
+      provider: openai-chat      # gemini | openai-compatible | openai-chat（含既有别名）
+      model: deepseek-chat       # openai-chat 必须显式给模型名
+      base_url: https://api.deepseek.com/v1
+      api_key_env: DEEPSEEK_API_KEY   # 间接引用环境变量；也可直写 api_key（不推荐，会有告警）
+    gpt:
+      provider: openai-compatible
+      model: gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+    gemini:
+      provider: gemini
+      model: gemini-2.5-flash
+      api_key_env: GEMINI_API_KEY
+
+# 宠物级覆盖：AGENT.md 的 provider 字段先按这里的名字匹配，匹配不到按类型名回退；
+# AGENT.md 的 model 字段覆盖命名 provider 的 model。
+
+mcp:
+  servers: []        # POCKETPET_MCP_SERVERS(JSON) 非空时整体覆盖本列表
+  # - name: weather
+  #   command: /usr/local/bin/mcp-weather
+  #   args: ["--units", "metric"]
+  #   env: {}

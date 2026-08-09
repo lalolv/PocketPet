@@ -456,3 +456,31 @@ func TestOrganizeUnconfiguredLLM(t *testing.T) {
 		t.Fatalf("events = %v", env.eventTypes())
 	}
 }
+
+// TestResolveCfgWithResolver 验证梦境整理的命名 provider 解析（与 chat 同一规则）。
+func TestResolveCfgWithResolver(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t, "lively")
+
+	resolver, err := llm.NewResolver(map[string]llm.ProviderConfig{
+		"deepseek": {Provider: llm.ProviderOpenAIChat, Model: "deepseek-chat", APIKey: "ds-key"},
+	}, "deepseek", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "env-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.org.Resolver = resolver
+
+	// 无 AGENT.md 覆盖 → 命名默认
+	cfg := env.org.resolveCfg(p.ID)
+	if cfg.Provider != llm.ProviderOpenAIChat || cfg.APIKey != "ds-key" {
+		t.Fatalf("named default = %+v", cfg)
+	}
+	// AGENT.md 写类型名 → 回退默认连接参数
+	if err := env.fs.Write(p.ID, petfs.FileAgent, "---\nprovider: gemini\nmodel: \"\"\nmcp: \"\"\n---\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg = env.org.resolveCfg(p.ID)
+	if cfg.Provider != llm.ProviderGemini || cfg.APIKey != "ds-key" {
+		t.Fatalf("type fallback = %+v", cfg)
+	}
+}

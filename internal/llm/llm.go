@@ -15,12 +15,18 @@ import (
 	adkmodel "google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/model/gemini"
 	"google.golang.org/adk/v2/model/openaimodel"
+
+	"pocketpet/internal/llm/chatmodel"
 )
 
 // 支持的 provider 类型。
 const (
 	ProviderGemini = "gemini"            // Google Gemini（model/gemini）
-	ProviderOpenAI = "openai-compatible" // OpenAI 兼容端点（model/openaimodel）
+	ProviderOpenAI = "openai-compatible" // OpenAI 兼容端点（model/openaimodel，Responses API）
+	// ProviderOpenAIChat 是 Chat Completions 兜底（/v1/chat/completions）：
+	// DeepSeek/Moonshot/通义/老 vLLM/Ollama 等只实现该 API 的端点。
+	// openai-compatible = Responses API（OpenAI 官方/新 vLLM/新 Ollama）。
+	ProviderOpenAIChat = "openai-chat"
 )
 
 // 环境变量名。APIKey/BaseURL 留空时由底层 SDK 回退到各家标准环境变量
@@ -68,6 +74,8 @@ func NormalizeProvider(p string) string {
 		return ProviderGemini
 	case "openai", "openai-compatible", "openai_compatible":
 		return ProviderOpenAI
+	case "openai-chat", "openai-chat-completions", "chat", "chat-completions":
+		return ProviderOpenAIChat
 	default:
 		return strings.ToLower(strings.TrimSpace(p))
 	}
@@ -75,6 +83,7 @@ func NormalizeProvider(p string) string {
 
 // Configured 报告配置是否足以发起一次真实调用。
 // APIKey 允许为空——此时要求对应的标准环境变量已设置。
+// openai-chat 还要求显式模型名（国产端点模型名各不相同，不瞎猜默认值）。
 func (c ProviderConfig) Configured() bool {
 	hasKey := c.APIKey != ""
 	switch c.Provider {
@@ -82,6 +91,8 @@ func (c ProviderConfig) Configured() bool {
 		return hasKey || os.Getenv("GOOGLE_API_KEY") != "" || os.Getenv("GEMINI_API_KEY") != ""
 	case ProviderOpenAI:
 		return hasKey || os.Getenv("OPENAI_API_KEY") != ""
+	case ProviderOpenAIChat:
+		return c.Model != "" && (hasKey || os.Getenv("OPENAI_API_KEY") != "")
 	default:
 		return false
 	}
@@ -112,6 +123,13 @@ func NewModel(ctx context.Context, c ProviderConfig) (adkmodel.LLM, error) {
 		// 不是 Chat Completions——只兼容实现了 /v1/responses 的端点。
 		// APIKey/BaseURL 为空时 openai-go 回退到 OPENAI_API_KEY / OPENAI_BASE_URL。
 		return openaimodel.NewModel(ctx, modelName, &openaimodel.ClientConfig{
+			APIKey:  c.APIKey,
+			BaseURL: c.BaseURL,
+		})
+	case ProviderOpenAIChat:
+		// Chat Completions 兜底适配（/v1/chat/completions）。
+		// 必须显式指定模型（Configured 已校验）——国产端点模型名各不相同，不猜默认值。
+		return chatmodel.NewModel(ctx, c.Model, &chatmodel.ClientConfig{
 			APIKey:  c.APIKey,
 			BaseURL: c.BaseURL,
 		})

@@ -20,7 +20,7 @@ const (
 
 // 告警/状态阈值。
 const (
-	// AlertLow：Hunger/Happy/Clean/Energy 低于该值时进入"饥饿/脏/困"状态，
+	// AlertLow：Hunger/Happy/Clean/Energy 低于该值时进入"饥饿/脏/困/低落"状态，
 	// 触发对应事件（边沿触发），且期间 Health 持续流失。
 	AlertLow = 20.0
 	// SickBelow：Health 低于该值时触发 pet.sick。
@@ -232,6 +232,7 @@ func (p *Pet) refresh(now time.Time) []Event {
 	evs = append(evs, p.checkAlert(&p.Alerts.Dirty, p.Stats.Clean < AlertLow, EventDirty, p.Name+" 脏兮兮的，该洗澡了", now)...)
 	evs = append(evs, p.checkAlert(&p.Alerts.Sleepy, p.Stats.Energy < AlertLow, EventSleepy, p.Name+" 困了，睁不开眼", now)...)
 	evs = append(evs, p.checkAlert(&p.Alerts.Sick, p.Stats.Health < SickBelow, EventSick, p.Name+" 看起来生病了", now)...)
+	evs = append(evs, p.checkAlert(&p.Alerts.Sad, p.Stats.Happy < AlertLow, EventSad, p.Name+" 心情低落，想找人陪陪", now)...)
 
 	// 死亡：健康归零。
 	if p.Alive && p.Stats.Health <= 0 {

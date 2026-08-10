@@ -68,8 +68,24 @@ type Config struct {
 	// LLM 是全局 LLM 连接配置（yaml llm 段）；零值 = 未配置，chat 走降级文案。
 	LLM llm.Config
 
+	// Proactive 是状态驱动的主动行为配置（yaml proactive 段），默认全部开启。
+	Proactive ProactiveConfig
+
 	// ConfigPath 是实际使用的配置文件路径（纯 env 模式为空）。
 	ConfigPath string
+}
+
+// ProactiveConfig 是状态驱动主动行为（internal/proactive）的开关组。
+type ProactiveConfig struct {
+	// Enabled 是总开关：false 时主动行为器完全不动作。
+	Enabled bool
+	// AutoSleep 为 true 时，宠物精力进入低位（pet.sleepy）后自动入睡。
+	AutoSleep bool
+	// AutoWake 为 true 时，睡眠中精力恢复满后自动醒来。
+	AutoWake bool
+	// Messages 为 true 时，告警/睡醒事件触发 LLM 第一人称主动消息
+	// （pet.proactive 事件，经 SSE 推送）；LLM 未配置时自动静默跳过。
+	Messages bool
 }
 
 // fileConfig 是 YAML 文件的镜像结构。
@@ -89,6 +105,13 @@ type fileConfig struct {
 		BaseURL string `yaml:"base_url"`
 		APIKey  string `yaml:"api_key"`
 	} `yaml:"llm"`
+	// 主动行为开关：指针以区分"未配置"（取默认值 true）与"显式关闭"。
+	Proactive struct {
+		Enabled   *bool `yaml:"enabled"`
+		AutoSleep *bool `yaml:"auto_sleep"`
+		AutoWake  *bool `yaml:"auto_wake"`
+		Messages  *bool `yaml:"messages"`
+	} `yaml:"proactive"`
 	MCP struct {
 		Servers []MCPServer `yaml:"servers"`
 	} `yaml:"mcp"`
@@ -107,6 +130,7 @@ func Load(flagPath string) (Config, error) {
 		DBPath:       "data/pocketpet.db",
 		DataRoot:     "data",
 		SkillsDir:    "skills",
+		Proactive:    ProactiveConfig{Enabled: true, AutoSleep: true, AutoWake: true, Messages: true},
 	}
 
 	// 1. 定位并应用配置文件。
@@ -175,6 +199,15 @@ func (cfg *Config) applyFile(path string) error {
 	if fc.Log.Level != "" {
 		cfg.LogLevel = fc.Log.Level
 	}
+	applyBool := func(dst *bool, src *bool) {
+		if src != nil {
+			*dst = *src
+		}
+	}
+	applyBool(&cfg.Proactive.Enabled, fc.Proactive.Enabled)
+	applyBool(&cfg.Proactive.AutoSleep, fc.Proactive.AutoSleep)
+	applyBool(&cfg.Proactive.AutoWake, fc.Proactive.AutoWake)
+	applyBool(&cfg.Proactive.Messages, fc.Proactive.Messages)
 
 	// LLM 连接配置：扁平单端点（OpenAI Chat Completions 兼容），密钥直接写在文件里。
 	cfg.LLM = llm.Config{

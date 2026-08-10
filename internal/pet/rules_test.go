@@ -151,3 +151,22 @@ func TestAdjust(t *testing.T) {
 		t.Fatalf("dead pet adjust = %v", evs)
 	}
 }
+
+
+// TestSadAlert 验证心情进入低位触发 pet.sad 边沿告警，恢复后清除标志。
+func TestSadAlert(t *testing.T) {
+	p := newTestPet()
+	evs := p.Adjust(Stats{Happy: -61}, t0) // 80-61=19 < AlertLow
+	assertEventTypes(t, evs, EventSad)
+	if !p.Alerts.Sad {
+		t.Fatal("sad alert should be set")
+	}
+	// 持续低落不重复触发；恢复后清除标志。
+	if evs := p.Adjust(Stats{}, t0); evs != nil {
+		t.Fatalf("re-alert = %v", evs)
+	}
+	p.Adjust(Stats{Happy: 50}, t0)
+	if p.Alerts.Sad {
+		t.Fatal("sad alert should be cleared")
+	}
+}

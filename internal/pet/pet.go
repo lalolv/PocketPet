@@ -47,6 +47,7 @@ type AlertState struct {
 	Dirty  bool `json:"dirty"`
 	Sleepy bool `json:"sleepy"`
 	Sick   bool `json:"sick"`
+	Sad    bool `json:"sad"`
 }
 
 // Pet 是一只宠物的完整数值状态（存储层以此为 JSON 快照持久化）。

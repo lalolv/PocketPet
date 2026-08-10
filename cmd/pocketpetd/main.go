@@ -23,6 +23,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/plugin"
 	"github.com/lalolv/PocketPet/internal/plugins/adventure"
 	"github.com/lalolv/PocketPet/internal/plugins/friends"
+	"github.com/lalolv/PocketPet/internal/proactive"
 	"github.com/lalolv/PocketPet/internal/store"
 	"github.com/lalolv/PocketPet/internal/tick"
 )
@@ -74,13 +75,21 @@ func main() {
 	}
 
 	// 事件订阅方：SSE hub + 阶段同步器（stage_up 回写 PET.md）+ 梦境整理器（入睡触发）
-	// + 插件 EventSubscriber。
+	// + 主动行为器（状态告警 → 主动消息/自动入睡）+ 插件 EventSubscriber。
 	stageSync := agent.NewStageSync(pfs, st)
 	organizer := dream.NewOrganizer(pfs, st, llmCfg)
-	sink := tick.MultiSink{hub, stageSync, organizer}
+	monitor := proactive.NewMonitor(st, pfs, llmCfg, proactive.Options{
+		Enabled:   cfg.Proactive.Enabled,
+		AutoSleep: cfg.Proactive.AutoSleep,
+		AutoWake:  cfg.Proactive.AutoWake,
+		Messages:  cfg.Proactive.Messages,
+	})
+	sink := tick.MultiSink{hub, stageSync, organizer, monitor}
 	sink = append(sink, registry.EventSinks()...)
 	engine := tick.NewEngine(st, sink, cfg.TickInterval, cfg.OfflineMax, pet.RealClock{})
 	organizer.Emitter = engine.Emit
+	monitor.Engine = engine
+	monitor.Emitter = engine.Emit
 
 	// 插件 Init（受控上下文）→ tick 钩子 → 工具 → 路由。
 	if err := registry.InitAll(plugin.NewPluginContext(engine, pfs, st.DB(), slog.Default())); err != nil {
@@ -90,6 +99,8 @@ func main() {
 	for _, h := range registry.TickHooks() {
 		engine.AddTickHook(h)
 	}
+	// 主动行为器的 tick 侧：睡饱自动醒来。
+	engine.AddTickHook(monitor)
 
 	petAgent := agent.New(engine, pfs, llmCfg, agent.Options{
 		SkillsDir:  cfg.SkillsDir,

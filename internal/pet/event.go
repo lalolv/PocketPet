@@ -9,11 +9,16 @@ const (
 	EventDirty   = "pet.dirty"    // 清洁度进入低位
 	EventSleepy  = "pet.sleepy"   // 精力进入低位
 	EventSick    = "pet.sick"     // 健康进入低位
+	EventSad     = "pet.sad"      // 心情进入低位
 	EventStageUp = "pet.stage_up" // 成长阶段晋升
 	EventDead    = "pet.dead"     // 死亡
 
 	EventFellAsleep = "pet.fell_asleep" // 入睡（M3：触发梦境整理）
 	EventWokeUp     = "pet.woke_up"     // 醒来
+
+	// EventProactive 由主动行为器（internal/proactive）产生，经 Engine.Emit 走同一事件流水：
+	// 状态驱动的第一人称主动消息（message 为宠物对主人说的话）。
+	EventProactive = "pet.proactive"
 
 	// 以下事件由梦境整理器（internal/dream）产生，经 Engine.Emit 走同一事件流水。
 	EventDream        = "pet.dream"         // 梦境独白（message 为第一人称梦境文本）

@@ -75,6 +75,24 @@ func (fs *FS) WriteWakeNote(id, text string) error {
 	return os.WriteFile(filepath.Join(fs.PetDir(id), FileWakeNote), []byte(text), 0o644)
 }
 
+// ReadWakeNote 读取睡醒便签但不删除（非消费语义）；没有便签时返回空串。
+// 供主动行为器等"旁观者"引用便签内容，便签本身仍留给醒来后的第一次对话消费。
+func (fs *FS) ReadWakeNote(id string) (string, error) {
+	unlock, err := fs.lock(id)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	b, err := os.ReadFile(filepath.Join(fs.PetDir(id), FileWakeNote))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 // TakeWakeNote 读取睡醒便签并删除（消费语义）；没有便签时返回空串。
 func (fs *FS) TakeWakeNote(id string) (string, error) {
 	unlock, err := fs.lock(id)

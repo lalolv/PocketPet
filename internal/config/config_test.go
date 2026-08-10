@@ -147,3 +147,30 @@ func TestBadFileErrors(t *testing.T) {
 		t.Fatalf("missing file err = %v", err)
 	}
 }
+
+
+func TestProactiveConfig(t *testing.T) {
+	// 默认全开（文件未写 proactive 段时保持默认）。
+	path := writeYAML(t, "server:\n  listen: ':9999'\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (ProactiveConfig{Enabled: true, AutoSleep: true, AutoWake: true, Messages: true}); cfg.Proactive != want {
+		t.Fatalf("proactive defaults = %+v, want %+v", cfg.Proactive, want)
+	}
+
+	// 显式关闭部分开关；未写的项保持默认 true。
+	path = writeYAML(t, `
+proactive:
+  auto_sleep: false
+  messages: false
+`)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (ProactiveConfig{Enabled: true, AutoSleep: false, AutoWake: true, Messages: false}); cfg.Proactive != want {
+		t.Fatalf("proactive = %+v, want %+v", cfg.Proactive, want)
+	}
+}

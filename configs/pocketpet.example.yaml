@@ -13,6 +13,14 @@ tick:
   interval_seconds: 60        # tick 结算间隔
   offline_catchup_max_hours: 24  # 离线补算时长上限
 
+# 状态驱动的主动行为（饿了/脏了/困了/病了/心情低落/睡醒时）。
+proactive:
+  enabled: true      # 总开关
+  auto_sleep: true   # 精力进入低位时自动入睡
+  auto_wake: true    # 睡眠中精力恢复满后自动醒来
+  messages: true     # 状态变化时由 LLM 生成第一人称主动消息（pet.proactive 事件，SSE 推送）；
+                     # 未配置 llm 时自动跳过消息，仅推送固定文案的告警事件
+
 log:
   level: info   # 日志级别：debug / info / warn / error；也可用 POCKETPET_LOG_LEVEL 覆盖。
                 # 终端运行时日志自动彩色显示；重定向到文件/管道时自动关闭颜色（NO_COLOR 可强制关闭）。

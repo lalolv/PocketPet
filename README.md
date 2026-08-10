@@ -13,6 +13,7 @@ PocketPet 是一个 Agent 原生的虚拟宠物项目：主人直接和宠物第
 - **文件即存在**：人格（`PET.md`/`SOUL.md`）、记忆（`MEMORY.md` + 日记）、技能（`SKILL.md`）都是可读文件，主人可以查看、备份、版本管理宠物的"内心"。
 - **数值在 Go，灵魂在 LLM**：属性/成长/生死规则确定性实现（纯 Go，无 cgo）；人格与表达交给 LLM；LLM 不可用时养成闭环照常运转（降级为性格化文案）。
 - **睡眠即整理**：入睡触发"梦境整理"——日记凝练成长期记忆、性格小幅演化、反复经验沉淀为 Skill，并生成梦境独白事件。
+- **状态驱动的主动行为**：饿了/脏了/病了/心情低落会主动给主人发消息（第一人称，经 SSE 推送），困了自动入睡、睡饱自动醒来——可在配置的 `proactive` 段逐项关闭。
 - **三层扩展体系**：SKILL.md 技能包（叙事与行为）/ MCP（外部能力）/ Go 插件（内核级扩展）。规则进插件，叙事进 Skill，外部进 MCP。
 - **OpenAI 兼容端点**：统一走 Chat Completions（OpenAI 官方 / DeepSeek / Moonshot / vLLM / Ollama 等均可），可按宠物覆盖模型。
 - **双端运行**：`pocketpetd` 后端守护进程（REST + SSE）+ `pocketpet-tui` 终端客户端（Bubble Tea 动画界面）。
@@ -84,7 +85,7 @@ llm:
 | GET | `/v1/pets` / `/v1/pets/{id}` | 列表 / 状态查询 |
 | POST | `/v1/pets/{id}/chat` | 和宠物对话（`?stream=true` SSE 流式） |
 | POST | `/v1/pets/{id}/care` | 照顾动作（feed / play / clean） |
-| GET | `/v1/pets/{id}/events` | SSE 事件流（message / dream / skill_learned / stage_up…） |
+| GET | `/v1/pets/{id}/events` | SSE 事件流（proactive / dream / skill_learned / stage_up…） |
 | GET | `/v1/pets/{id}/soul` | 查看 SOUL.md（含演化历史） |
 | GET | `/v1/pets/{id}/memory` | 查看长期记忆 / 日记 |
 | GET | `/v1/pets/{id}/skills` | 技能列表（含睡眠沉淀学到的） |
@@ -100,6 +101,7 @@ llm:
 │   ├── pet/             # 领域层：属性/成长/规则（纯 Go，不依赖 LLM）
 │   ├── agent/           # PetAgent 运行时：指令装配、工具、降级文案
 │   ├── dream/           # 梦境整理：记忆凝练、SOUL 演化、Skill 沉淀
+│   ├── proactive/       # 主动行为：状态触发的主动消息、自动入睡/醒来
 │   ├── llm/             # LLM 连接工厂（OpenAI Chat Completions 兼容端点）
 │   ├── api/             # REST + SSE 接口层
 │   ├── store/           # SQLite：数值状态 + 事件流水

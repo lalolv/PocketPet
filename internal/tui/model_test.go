@@ -196,13 +196,13 @@ func TestChatFlow(t *testing.T) {
 	// 文本块逐步上屏
 	m = update(t, m, chatEventMsg{chunk: "哼，"})
 	m = update(t, m, chatEventMsg{chunk: "你好呀"})
-	if v := m.renderString(); !strings.Contains(v, "团团：哼，你好呀▌") {
+	if v := m.renderString(); !strings.Contains(v, "[团团]: 哼，你好呀▌") {
 		t.Fatalf("streaming view:\n%s", v)
 	}
 	// done 定稿进日志
 	m = update(t, m, chatEventMsg{done: true, reply: "哼，你好呀"})
 	last := m.logs[len(m.logs)-1]
-	if !strings.Contains(last, "团团：哼，你好呀") {
+	if !strings.Contains(last, "[团团]: 哼，你好呀") {
 		t.Fatalf("reply log = %q", last)
 	}
 	if m.streaming || m.streamBuf != "" {
@@ -227,7 +227,7 @@ func TestChatStreamInterrupt(t *testing.T) {
 	// 取消后 done 到达：部分内容带省略号定稿
 	m = update(t, m, chatEventMsg{done: true})
 	last := m.logs[len(m.logs)-1]
-	if !strings.Contains(last, "团团：我想说 …") {
+	if !strings.Contains(last, "[团团]: 我想说 …") {
 		t.Fatalf("partial log = %q", last)
 	}
 	if m.streaming {

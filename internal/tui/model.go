@@ -295,14 +295,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case ev.err != nil:
 			if m.streamBuf != "" {
-				m.logf("%s：%s …", m.pet.Name, m.streamBuf)
+				m.logf("[%s]: %s …", m.pet.Name, m.streamBuf)
 			}
 			m.logf("✗ %s", friendlyErr(ev.err))
 		case ev.reply != "":
-			m.logf("%s：%s", m.pet.Name, ev.reply)
+			m.logf("[%s]: %s", m.pet.Name, ev.reply)
 		case m.streamBuf != "":
 			// 中断（esc）或空回复：保留已收到的部分。
-			m.logf("%s：%s …", m.pet.Name, m.streamBuf)
+			m.logf("[%s]: %s …", m.pet.Name, m.streamBuf)
 		}
 		m.streamBuf = ""
 		return m, nil
@@ -509,9 +509,11 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 	case "_sys": // 客户端自身的连接提示（重连等）
 		m.logf("· %s", ev.Message)
 		return m, waitEventCmd(m.sseCh)
+	case "pet.proactive", "pet.dream": // 宠物主动说的话，与聊天回复同格式
+		m.logf("[%s]: %s", m.pet.Name, ev.Message)
+	default: // 状态变化通知；落库时间为 UTC，显示前转本地时区
+		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	}
-
-	m.logf("• %s %s", ev.CreatedAt.Format("15:04"), ev.Message)
 	switch ev.Type {
 	case "pet.fell_asleep":
 		m.pet.Sleeping = true

@@ -114,7 +114,7 @@ func (m model) renderMain() string {
 	}
 	// 流式回复：未收到的部分以光标占位。
 	if m.streaming {
-		b.WriteString(inputStyle.Render(m.pet.Name + "：" + m.streamBuf + "▌") + "\n")
+		b.WriteString(inputStyle.Render("[" + m.pet.Name + "]: " + m.streamBuf + "▌") + "\n")
 	}
 
 	// 底部帮助 / 输入行

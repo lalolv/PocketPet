@@ -61,11 +61,8 @@ type Config struct {
 	// env JSON 非空时整体覆盖文件列表（与"环境变量 > 配置文件"优先级一致）。
 	MCPServers []MCPServer
 
-	// LLMDefault 是命名 provider 名（yaml llm.default）；空 = env 单 provider 模式。
-	LLMDefault string
-	// LLMProviders 是命名 provider 表（yaml llm.providers），key 为名字。
-	// api_key_env 已在加载时解析为 APIKey；指向的环境变量缺失则 APIKey 为空（按未配置降级）。
-	LLMProviders map[string]llm.ProviderConfig
+	// LLM 是全局 LLM 连接配置（yaml llm 段）；零值 = 未配置，chat 走降级文案。
+	LLM llm.Config
 
 	// ConfigPath 是实际使用的配置文件路径（纯 env 模式为空）。
 	ConfigPath string
@@ -84,21 +81,13 @@ type fileConfig struct {
 		OfflineCatchupMaxHours int `yaml:"offline_catchup_max_hours"`
 	} `yaml:"tick"`
 	LLM struct {
-		Default   string                    `yaml:"default"`
-		Providers map[string]fileProviderKV `yaml:"providers"`
+		Model   string `yaml:"model"`
+		BaseURL string `yaml:"base_url"`
+		APIKey  string `yaml:"api_key"`
 	} `yaml:"llm"`
 	MCP struct {
 		Servers []MCPServer `yaml:"servers"`
 	} `yaml:"mcp"`
-}
-
-// fileProviderKV 是 yaml 里一个命名 provider 的字段。
-type fileProviderKV struct {
-	Provider  string `yaml:"provider"`
-	Model     string `yaml:"model"`
-	BaseURL   string `yaml:"base_url"`
-	APIKeyEnv string `yaml:"api_key_env"`
-	APIKey    string `yaml:"api_key"`
 }
 
 // Load 加载配置：flagPath 为 -config 启动参数（空则按规则探测）。
@@ -177,27 +166,12 @@ func (cfg *Config) applyFile(path string) error {
 		cfg.MCPServers = fc.MCP.Servers
 	}
 
-	// 命名 provider：解析 api_key_env；直写 api_key 支持但告警（secrets 不宜入库）。
-	for name, kv := range fc.LLM.Providers {
-		pc := llm.ProviderConfig{
-			Provider: llm.NormalizeProvider(kv.Provider),
-			Model:    kv.Model,
-			BaseURL:  kv.BaseURL,
-		}
-		switch {
-		case kv.APIKeyEnv != "":
-			pc.APIKey = os.Getenv(kv.APIKeyEnv)
-		case kv.APIKey != "":
-			slog.Warn("config: api_key written directly in config file is discouraged; prefer api_key_env",
-				"file", path, "provider", name)
-			pc.APIKey = kv.APIKey
-		}
-		if cfg.LLMProviders == nil {
-			cfg.LLMProviders = map[string]llm.ProviderConfig{}
-		}
-		cfg.LLMProviders[name] = pc
+	// LLM 连接配置：扁平单端点（OpenAI Chat Completions 兼容），密钥直接写在文件里。
+	cfg.LLM = llm.Config{
+		Model:   fc.LLM.Model,
+		BaseURL: fc.LLM.BaseURL,
+		APIKey:  fc.LLM.APIKey,
 	}
-	cfg.LLMDefault = fc.LLM.Default
 	return nil
 }
 

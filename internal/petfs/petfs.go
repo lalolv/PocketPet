@@ -222,8 +222,7 @@ func (fs *FS) SoulTemplate(id string) (string, error) {
 
 // AgentSpec 是 AGENT.md frontmatter 的装配声明。
 type AgentSpec struct {
-	Provider string // 空 = 跟随全局配置
-	Model    string // 空 = 跟随全局配置
+	Model string // 空 = 跟随全局配置
 	// MCPServers 是该宠物启用的 MCP server 名字列表（对应全局 POCKETPET_MCP_SERVERS），
 	// frontmatter 里以逗号分隔，如 mcp: weather,smart-home。
 	MCPServers []string
@@ -240,7 +239,6 @@ func (fs *FS) AgentSpec(id string) (AgentSpec, error) {
 	if !ok {
 		return spec, nil
 	}
-	spec.Provider = frontmatterValue(lines, "provider")
 	spec.Model = frontmatterValue(lines, "model")
 	for _, name := range strings.Split(frontmatterValue(lines, "mcp"), ",") {
 		if name = strings.TrimSpace(name); name != "" {

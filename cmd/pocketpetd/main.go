@@ -18,7 +18,6 @@ import (
 	"github.com/lalolv/PocketPet/internal/api"
 	"github.com/lalolv/PocketPet/internal/config"
 	"github.com/lalolv/PocketPet/internal/dream"
-	"github.com/lalolv/PocketPet/internal/llm"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/plugin"
@@ -37,12 +36,7 @@ func main() {
 		slog.Error("load config failed", "err", err)
 		os.Exit(1)
 	}
-	llmResolver, err := llm.NewResolver(cfg.LLMProviders, cfg.LLMDefault, llm.FromEnv())
-	if err != nil {
-		slog.Error("load llm config failed", "err", err)
-		os.Exit(1)
-	}
-	llmCfg := llmResolver.Default()
+	llmCfg := cfg.LLM
 
 	slog.Info("starting pocketpetd",
 		"listen", cfg.ListenAddr,
@@ -51,12 +45,12 @@ func main() {
 		"offline_max", cfg.OfflineMax,
 		"db", cfg.DBPath,
 		"data_dir", cfg.DataRoot,
-		"llm_provider", orNone(llmCfg.Provider),
 		"llm_model", orNone(llmCfg.Model),
+		"llm_base_url", orNone(llmCfg.BaseURL),
 	)
 	if !llmCfg.Configured() {
 		slog.Info("llm not configured, chat will use personality fallback lines " +
-			"(set POCKETPET_LLM_* env or llm.providers in config file to enable real LLM chat)")
+			"(set llm.model / llm.api_key in config file to enable real LLM chat)")
 	}
 
 	st, err := store.Open(cfg.DBPath)
@@ -81,7 +75,6 @@ func main() {
 	// + 插件 EventSubscriber。
 	stageSync := agent.NewStageSync(pfs, st)
 	organizer := dream.NewOrganizer(pfs, st, llmCfg)
-	organizer.Resolver = llmResolver
 	sink := tick.MultiSink{hub, stageSync, organizer}
 	sink = append(sink, registry.EventSinks()...)
 	engine := tick.NewEngine(st, sink, cfg.TickInterval, cfg.OfflineMax, pet.RealClock{})
@@ -100,7 +93,6 @@ func main() {
 		SkillsDir:  cfg.SkillsDir,
 		MCPServers: cfg.MCPServers,
 		ExtraTools: registry.Tools(),
-		Resolver:   llmResolver,
 	})
 	server := api.NewServer(st, engine, hub, pfs, petAgent)
 	for _, pr := range registry.Routes() {

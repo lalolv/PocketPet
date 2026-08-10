@@ -11,8 +11,8 @@ import (
 	"github.com/lalolv/PocketPet/internal/llm"
 )
 
-// TestChatViaOpenAIChatProvider 是 openai-chat provider 的端到端集成：
-// 真实 PetAgent → llm 工厂 → chatmodel（Chat Completions）→ 假端点，
+// TestChatViaOpenAIChatProvider 是 Chat Completions 端点的端到端集成：
+// 真实 PetAgent → llm 工厂 → chatmodel → 假端点，
 // 走通"对话 + remember 工具回合"，且日记真的落盘。
 func TestChatViaOpenAIChatProvider(t *testing.T) {
 	// 假 Chat Completions 端点：第一次请求回 tool_call（remember），
@@ -72,12 +72,11 @@ func TestChatViaOpenAIChatProvider(t *testing.T) {
 
 	env := setup(t)
 	p := env.newPet(t, "团团", "tsundere")
-	// 走生产工厂路径：openai-chat provider 指向假端点。
-	env.agent.cfg = llm.ProviderConfig{
-		Provider: llm.ProviderOpenAIChat,
-		Model:    "deepseek-chat",
-		BaseURL:  srv.URL,
-		APIKey:   "fake",
+	// 走生产工厂路径：配置指向假端点。
+	env.agent.cfg = llm.Config{
+		Model:   "deepseek-chat",
+		BaseURL: srv.URL,
+		APIKey:  "fake",
 	}
 
 	reply, err := env.agent.Chat(context.Background(), p.ID, "记住：我叫阿洛")
@@ -104,7 +103,7 @@ func TestChatViaOpenAIChatProvider(t *testing.T) {
 	}
 }
 
-// TestOpenAIChatProviderStream 验证 openai-chat 的流式对话路径（ChatStream）。
+// TestOpenAIChatProviderStream 验证流式对话路径（ChatStream）。
 func TestOpenAIChatProviderStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -124,11 +123,10 @@ func TestOpenAIChatProviderStream(t *testing.T) {
 
 	env := setup(t)
 	p := env.newPet(t, "团团", "quiet")
-	env.agent.cfg = llm.ProviderConfig{
-		Provider: llm.ProviderOpenAIChat,
-		Model:    "deepseek-chat",
-		BaseURL:  srv.URL,
-		APIKey:   "fake",
+	env.agent.cfg = llm.Config{
+		Model:   "deepseek-chat",
+		BaseURL: srv.URL,
+		APIKey:  "fake",
 	}
 
 	var chunks []string
@@ -143,18 +141,16 @@ func TestOpenAIChatProviderStream(t *testing.T) {
 	}
 }
 
-// TestProviderConfigOpenAIChat 验证工厂的 openai-chat 配置规则。
-func TestProviderConfigOpenAIChat(t *testing.T) {
+// TestLLMConfig 验证 llm.Config 的配置判定与工厂构造。
+func TestLLMConfig(t *testing.T) {
 	// 无模型名 → 未配置（诚实报错，不猜默认模型）
-	cfg := llm.ProviderConfig{Provider: "openai-chat", APIKey: "k"}
+	cfg := llm.Config{APIKey: "k"}
 	if cfg.Configured() {
-		t.Fatal("openai-chat without model should not be configured")
+		t.Fatal("without model should not be configured")
 	}
-	// 别名归一化
-	for _, alias := range []string{"chat", "chat-completions", "openai-chat-completions"} {
-		if got := llm.NormalizeProvider(alias); got != llm.ProviderOpenAIChat {
-			t.Fatalf("alias %q → %q", alias, got)
-		}
+	// 无密钥 → 未配置
+	if (llm.Config{Model: "deepseek-chat"}).Configured() {
+		t.Fatal("without api key should not be configured")
 	}
 	// 完整配置可构造
 	cfg.Model = "deepseek-chat"
@@ -167,5 +163,9 @@ func TestProviderConfigOpenAIChat(t *testing.T) {
 	}
 	if m.Name() != "deepseek-chat" {
 		t.Fatalf("name = %q", m.Name())
+	}
+	// 未配置 → ErrNotConfigured
+	if _, err := llm.NewModel(context.Background(), llm.Config{}); err == nil {
+		t.Fatal("unconfigured should error")
 	}
 }

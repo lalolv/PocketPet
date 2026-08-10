@@ -14,25 +14,13 @@ tick:
   offline_catchup_max_hours: 24  # 离线补算时长上限
 
 llm:
-  # default 引用 providers 里的名字；缺省则回退 env 单 provider 模式（POCKETPET_LLM_*）。
-  default: deepseek
-  providers:
-    deepseek:
-      provider: openai-chat      # gemini | openai-compatible | openai-chat（含既有别名）
-      model: deepseek-chat       # openai-chat 必须显式给模型名
-      base_url: https://api.deepseek.com/v1
-      api_key_env: DEEPSEEK_API_KEY   # 间接引用环境变量；也可直写 api_key（不推荐，会有告警）
-    gpt:
-      provider: openai-compatible
-      model: gpt-4o-mini
-      api_key_env: OPENAI_API_KEY
-    gemini:
-      provider: gemini
-      model: gemini-2.5-flash
-      api_key_env: GEMINI_API_KEY
+  # 任意 OpenAI Chat Completions 兼容端点（OpenAI 官方 / DeepSeek / Moonshot / vLLM / Ollama 等）。
+  # model 与 api_key 必填；base_url 留空 = OpenAI 官方地址。密钥直接写在这里。
+  model: deepseek-chat
+  base_url: https://api.deepseek.com
+  api_key: sk-xxx
 
-# 宠物级覆盖：AGENT.md 的 provider 字段先按这里的名字匹配，匹配不到按类型名回退；
-# AGENT.md 的 model 字段覆盖命名 provider 的 model。
+# 宠物级覆盖：AGENT.md 的 model 字段可让单只宠物换用别的模型（其余连接参数继承全局）。
 
 mcp:
   servers: []        # POCKETPET_MCP_SERVERS(JSON) 非空时整体覆盖本列表

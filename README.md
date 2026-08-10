@@ -14,7 +14,7 @@ PocketPet 是一个 Agent 原生的虚拟宠物项目：主人直接和宠物第
 - **数值在 Go，灵魂在 LLM**：属性/成长/生死规则确定性实现（纯 Go，无 cgo）；人格与表达交给 LLM；LLM 不可用时养成闭环照常运转（降级为性格化文案）。
 - **睡眠即整理**：入睡触发"梦境整理"——日记凝练成长期记忆、性格小幅演化、反复经验沉淀为 Skill，并生成梦境独白事件。
 - **三层扩展体系**：SKILL.md 技能包（叙事与行为）/ MCP（外部能力）/ Go 插件（内核级扩展）。规则进插件，叙事进 Skill，外部进 MCP。
-- **多 LLM 支持**：Gemini、OpenAI 兼容（Responses API）、Chat Completions 兜底（DeepSeek/Moonshot 等），可按宠物覆盖。
+- **OpenAI 兼容端点**：统一走 Chat Completions（OpenAI 官方 / DeepSeek / Moonshot / vLLM / Ollama 等均可），可按宠物覆盖模型。
 - **双端运行**：`pocketpetd` 后端守护进程（REST + SSE）+ `pocketpet-tui` 终端客户端（Bubble Tea 动画界面）。
 
 ## 快速开始
@@ -65,19 +65,16 @@ curl -X POST localhost:8080/v1/pets/{id}/care \
 
 配置优先级：启动参数 `-config` > 环境变量 > 配置文件 > 默认值。示例见 [configs/pocketpet.example.yaml](configs/pocketpet.example.yaml)。
 
-配置 LLM（任选其一）：
+配置 LLM（写在配置文件的 `llm` 段，密钥直接填写）：
 
-```bash
-# 方式一：环境变量（单 provider）
-export POCKETPET_LLM_PROVIDER=openai-chat
-export POCKETPET_LLM_BASE_URL=https://api.deepseek.com/v1
-export POCKETPET_LLM_MODEL=deepseek-chat
-export POCKETPET_LLM_API_KEY=sk-...
-
-# 方式二：配置文件 llm.providers 声明命名 provider（密钥经 api_key_env 间接引用）
+```yaml
+llm:
+  model: deepseek-chat                 # 必填
+  base_url: https://api.deepseek.com/v1 # 任意 OpenAI Chat Completions 兼容端点；留空 = OpenAI 官方
+  api_key: sk-...                       # 必填，直接写在这里
 ```
 
-支持的 provider 类型：`gemini`、`openai-compatible`（Responses API）、`openai-chat`（Chat Completions 兜底，须显式给模型名）。每只宠物可通过自己的 `AGENT.md` 覆盖 provider 与模型。
+每只宠物可通过自己的 `AGENT.md` 覆盖模型（`model` 字段）。
 
 ## API 概览
 
@@ -103,7 +100,7 @@ export POCKETPET_LLM_API_KEY=sk-...
 │   ├── pet/             # 领域层：属性/成长/规则（纯 Go，不依赖 LLM）
 │   ├── agent/           # PetAgent 运行时：指令装配、工具、降级文案
 │   ├── dream/           # 梦境整理：记忆凝练、SOUL 演化、Skill 沉淀
-│   ├── llm/             # LLM provider 工厂（gemini / openai 兼容 / chat 兜底）
+│   ├── llm/             # LLM 连接工厂（OpenAI Chat Completions 兼容端点）
 │   ├── api/             # REST + SSE 接口层
 │   ├── store/           # SQLite：数值状态 + 事件流水
 │   ├── petfs/           # 宠物文件系统（PET/SOUL/MEMORY/skills）

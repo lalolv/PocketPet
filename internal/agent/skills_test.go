@@ -105,7 +105,7 @@ func TestSkillMountedAndHotReloaded(t *testing.T) {
 
 	fake := &fakeModel{reply: "晚安喵。"}
 	env.agent.opts = Options{SkillsDir: globalDir,
-		ModelFactory: func(context.Context, llm.ProviderConfig) (adkmodel.LLM, error) { return fake, nil }}
+		ModelFactory: func(context.Context, llm.Config) (adkmodel.LLM, error) { return fake, nil }}
 
 	if _, err := env.agent.Chat(context.Background(), p.ID, "晚安"); err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestMCPToolMounted(t *testing.T) {
 		MCPTransport: func(config.MCPServer) (mcp.Transport, error) {
 			return clientT, nil
 		},
-		ModelFactory: func(context.Context, llm.ProviderConfig) (adkmodel.LLM, error) { return fake, nil },
+		ModelFactory: func(context.Context, llm.Config) (adkmodel.LLM, error) { return fake, nil },
 	}
 
 	reply, err := env.agent.Chat(context.Background(), p.ID, "今天天气怎么样")
@@ -339,7 +339,7 @@ func TestExtraToolsFromPlugins(t *testing.T) {
 	}}
 	env.agent.opts = Options{
 		ExtraTools:   []adktool.Tool{extra},
-		ModelFactory: func(context.Context, llm.ProviderConfig) (adkmodel.LLM, error) { return fake, nil },
+		ModelFactory: func(context.Context, llm.Config) (adkmodel.LLM, error) { return fake, nil },
 	}
 
 	if _, err := env.agent.Chat(context.Background(), p.ID, "看看你是谁"); err != nil {

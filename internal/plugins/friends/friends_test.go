@@ -246,7 +246,7 @@ func TestFriendsRoute(t *testing.T) {
 	}
 
 	hub := api.NewHub()
-	ag := agent.New(env.engine, env.fs, llm.ProviderConfig{})
+	ag := agent.New(env.engine, env.fs, llm.Config{})
 	srv := api.NewServer(env.st, env.engine, hub, env.fs, ag)
 	for _, pr := range []struct {
 		name   string

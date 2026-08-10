@@ -44,7 +44,7 @@ func setup(t *testing.T) *testEnv {
 	hub := NewHub()
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
-	ag := agent.New(engine, fs, llm.ProviderConfig{})
+	ag := agent.New(engine, fs, llm.Config{})
 	srv := httptest.NewServer(NewServer(st, engine, hub, fs, ag).Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, clock: clock}
@@ -477,7 +477,7 @@ func setupOpts(t *testing.T, opts agent.Options) *testEnv {
 	hub := NewHub()
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
-	ag := agent.New(engine, fs, llm.ProviderConfig{}, opts)
+	ag := agent.New(engine, fs, llm.Config{}, opts)
 	srv := httptest.NewServer(NewServer(st, engine, hub, fs, ag).Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, clock: clock}
@@ -564,7 +564,7 @@ func TestA2AMessageNoLLM(t *testing.T) {
 // TestA2AMessageRoundTrip 用 fake model 验证 A2A 消息往返（无 key 环境）。
 func TestA2AMessageRoundTrip(t *testing.T) {
 	env := setupOpts(t, agent.Options{
-		ModelFactory: func(context.Context, llm.ProviderConfig) (adkmodel.LLM, error) {
+		ModelFactory: func(context.Context, llm.Config) (adkmodel.LLM, error) {
 			return &a2aFakeModel{reply: "我是团团，你好呀！"}, nil
 		},
 	})

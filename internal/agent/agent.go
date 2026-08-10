@@ -48,12 +48,10 @@ type Options struct {
 	SkillsDir string
 	// MCPServers 是全局可用的 MCP server 声明；宠物在 AGENT.md 里按名启用。
 	MCPServers []config.MCPServer
-	// Resolver 是命名 provider 解析器（YAML 配置体系）；nil 时以 cfg 构造单 provider 解析器。
-	Resolver *llm.Resolver
 
 	// 以下为测试/定制接缝：nil 时使用生产实现。
 	// ModelFactory 替换 model.LLM 的构造（测试注入 fake model 以验证装配结果）。
-	ModelFactory func(ctx context.Context, cfg llm.ProviderConfig) (adkmodel.LLM, error)
+	ModelFactory func(ctx context.Context, cfg llm.Config) (adkmodel.LLM, error)
 	// MCPTransport 替换 MCP server 的传输构造（默认 stdio CommandTransport）。
 	MCPTransport func(spec config.MCPServer) (mcp.Transport, error)
 	// ExtraTools 是注入全部宠物的全局工具（M5 插件体系，由 plugin.Registry.Tools 收集）。
@@ -65,7 +63,7 @@ type Options struct {
 type PetAgent struct {
 	engine   *tick.Engine
 	fs       *petfs.FS
-	cfg      llm.ProviderConfig // 全局默认配置（无 opts.Resolver 时的兼容解析来源，运行期可被替换）
+	cfg      llm.Config // 全局 LLM 配置（运行期可被替换，如测试注入假端点）
 	opts     Options
 
 	mu        sync.Mutex
@@ -78,7 +76,7 @@ type PetAgent struct {
 }
 
 // cachedRunner 记录 runner、其 llmagent 及装配指纹；
-// AGENT.md 变更（provider/model/mcp 声明）导致指纹变化时自动重建。
+// AGENT.md 变更（model/mcp 声明）导致指纹变化时自动重建。
 // 技能不在指纹里：skilltoolset 每次请求实时读盘，新技能自动生效。
 type cachedRunner struct {
 	r           *runner.Runner
@@ -86,8 +84,8 @@ type cachedRunner struct {
 	fingerprint string
 }
 
-// New 创建 PetAgent。cfg 为全局 LLM 配置（env 单 provider 或命名 provider 的默认值）。
-func New(eng *tick.Engine, fs *petfs.FS, cfg llm.ProviderConfig, opts ...Options) *PetAgent {
+// New 创建 PetAgent。cfg 为全局 LLM 配置（配置文件 llm 段）。
+func New(eng *tick.Engine, fs *petfs.FS, cfg llm.Config, opts ...Options) *PetAgent {
 	var o Options
 	if len(opts) > 0 {
 		o = opts[0]
@@ -245,21 +243,20 @@ func (a *PetAgent) lockChat(id string) func() {
 }
 
 // runnerFor 返回该宠物的缓存运行时，首次调用时装配：
-// 全局配置 ← AGENT.md 覆盖（命名 provider 优先，类型名回退）→ 构造 model.LLM
+// 全局配置 ← AGENT.md model 覆盖 → 构造 model.LLM
 // → llmagent（动态指令 + 工具 + 工具集）→ runner。
 func (a *PetAgent) runnerFor(ctx context.Context, p *pet.Pet) (*cachedRunner, error) {
 	var spec petfs.AgentSpec
 	if s, err := a.fs.AgentSpec(p.ID); err == nil {
 		spec = s
 	}
-	// opts.Resolver（YAML 命名 provider 体系）优先；否则按当前 cfg 现场构造
-	// 单 provider 兼容解析器（a.cfg 可能在 New 之后被替换，如测试与旧行为）。
-	rs := a.opts.Resolver
-	if rs == nil {
-		rs, _ = llm.NewResolver(nil, "", a.cfg)
+	// AGENT.md 可按宠物覆盖 model；a.cfg 可能在 New 之后被替换（测试注入假端点），
+	// 因此每次现场基于当前 cfg 解析。
+	cfg := a.cfg
+	if spec.Model != "" {
+		cfg.Model = spec.Model
 	}
-	cfg := rs.Resolve(spec.Provider, spec.Model)
-	fingerprint := cfg.Provider + "|" + cfg.Model + "|" + strings.Join(spec.MCPServers, ",")
+	fingerprint := cfg.Model + "|" + strings.Join(spec.MCPServers, ",")
 
 	a.mu.Lock()
 	defer a.mu.Unlock()

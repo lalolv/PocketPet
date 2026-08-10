@@ -187,16 +187,16 @@ func TestAgentSpec(t *testing.T) {
 	}
 	// 默认模板：全部留空
 	spec, err := fs.AgentSpec("pet1")
-	if err != nil || spec.Provider != "" || spec.Model != "" || len(spec.MCPServers) != 0 {
+	if err != nil || spec.Model != "" || len(spec.MCPServers) != 0 {
 		t.Fatalf("default AgentSpec = %+v, %v", spec, err)
 	}
 	// 主人编辑后生效（含 mcp 声明）
-	agentMD := "---\nprovider: openai-compatible\nmodel: \"gpt-4o-mini\"\nmcp: weather, smart-home\n---\n自定义说明\n"
+	agentMD := "---\nmodel: \"deepseek-reasoner\"\nmcp: weather, smart-home\n---\n自定义说明\n"
 	if err := fs.Write("pet1", FileAgent, agentMD); err != nil {
 		t.Fatal(err)
 	}
 	spec, err = fs.AgentSpec("pet1")
-	if err != nil || spec.Provider != "openai-compatible" || spec.Model != "gpt-4o-mini" {
+	if err != nil || spec.Model != "deepseek-reasoner" {
 		t.Fatalf("AgentSpec = %+v, %v", spec, err)
 	}
 	if len(spec.MCPServers) != 2 || spec.MCPServers[0] != "weather" || spec.MCPServers[1] != "smart-home" {

@@ -36,7 +36,7 @@ func newTestServer(t *testing.T) *testServer {
 	hub := api.NewHub()
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
-	ag := agent.New(engine, fs, llm.ProviderConfig{})
+	ag := agent.New(engine, fs, llm.Config{})
 	srv := httptest.NewServer(api.NewServer(st, engine, hub, fs, ag).Handler())
 	t.Cleanup(srv.Close)
 	return &testServer{srv: srv, clock: clock}

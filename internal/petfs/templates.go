@@ -130,20 +130,19 @@ func instructionsMD() string {
 `
 }
 
-// agentMD 生成 AGENT.md（装配声明：留空 = 跟随全局环境变量配置）。
+// agentMD 生成 AGENT.md（装配声明：留空 = 跟随全局配置）。
 func agentMD() string {
 	return `---
-provider: ""
 model: ""
 mcp: ""
 ---
 # 装配声明
 
-provider / model 留空表示跟随全局环境变量配置（POCKETPET_LLM_PROVIDER 等）。
-在这里填写后仅对这只宠物生效，例如 provider: "openai-compatible"、model: "gpt-4o-mini"。
+model 留空表示跟随全局配置（configs/pocketpet.yaml 的 llm 段）。
+在这里填写后仅对这只宠物生效，例如 model: "deepseek-reasoner"。
 
 mcp 列出这只宠物启用的 MCP server 名字（逗号分隔），如 mcp: "weather,smart-home"。
-可用的 server 由全局环境变量 POCKETPET_MCP_SERVERS 声明。
+可用的 server 由全局配置（configs/pocketpet.yaml 的 mcp.servers 或 POCKETPET_MCP_SERVERS）声明。
 `
 }
 

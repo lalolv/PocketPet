@@ -67,16 +67,14 @@ type ReflectResult struct {
 type Organizer struct {
 	fs  *petfs.FS
 	st  *store.Store
-	cfg llm.ProviderConfig
+	cfg llm.Config
 
 	// Emitter 输出整理产生的领域事件（落库 + SSE），通常接 tick.Engine.Emit；
 	// 必须在启动前设置（main 里在 Engine 创建后接线）。
 	Emitter func(ctx context.Context, evs ...pet.Event)
-	// Reflector 为 nil 时按 LLM 配置（全局 + AGENT.md 覆盖）惰性构造 LLMReflector，
+	// Reflector 为 nil 时按 LLM 配置（全局 + AGENT.md model 覆盖）惰性构造 LLMReflector，
 	// 配置缺失则静默跳过整理。测试注入 fake。
 	Reflector Reflector
-	// Resolver 是命名 provider 解析器（YAML 配置体系）；nil 时以 cfg 走单 provider 兼容路径。
-	Resolver *llm.Resolver
 	// Now 返回当前时间（日记命名、事件时间戳）；nil 时用 time.Now。测试注入假时钟。
 	Now func() time.Time
 
@@ -85,7 +83,7 @@ type Organizer struct {
 }
 
 // NewOrganizer 创建整理器。
-func NewOrganizer(fs *petfs.FS, st *store.Store, cfg llm.ProviderConfig) *Organizer {
+func NewOrganizer(fs *petfs.FS, st *store.Store, cfg llm.Config) *Organizer {
 	return &Organizer{fs: fs, st: st, cfg: cfg, pending: make(map[string]bool)}
 }
 
@@ -151,22 +149,11 @@ func (o *Organizer) Organize(ctx context.Context, petID string) error {
 	return nil
 }
 
-// resolveCfg 解析该宠物的有效 LLM 配置：有 Resolver 走命名 provider 解析
-// （名字优先、类型名回退），否则走单 provider 兼容路径（全局配置 ← AGENT.md 覆盖）。
-func (o *Organizer) resolveCfg(petID string) llm.ProviderConfig {
-	var spec petfs.AgentSpec
-	if s, err := o.fs.AgentSpec(petID); err == nil {
-		spec = s
-	}
-	if o.Resolver != nil {
-		return o.Resolver.Resolve(spec.Provider, spec.Model)
-	}
+// resolveCfg 解析该宠物的有效 LLM 配置：全局配置 ← AGENT.md model 覆盖。
+func (o *Organizer) resolveCfg(petID string) llm.Config {
 	cfg := o.cfg
-	if spec.Provider != "" {
-		cfg.Provider = llm.NormalizeProvider(spec.Provider)
-	}
-	if spec.Model != "" {
-		cfg.Model = spec.Model
+	if s, err := o.fs.AgentSpec(petID); err == nil && s.Model != "" {
+		cfg.Model = s.Model
 	}
 	return cfg
 }

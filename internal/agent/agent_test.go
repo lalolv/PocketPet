@@ -36,7 +36,7 @@ func setup(t *testing.T) *testEnv {
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
 	// 未配置 provider：所有 chat 都必须走降级路径。
-	ag := New(engine, fs, llm.ProviderConfig{})
+	ag := New(engine, fs, llm.Config{})
 	return &testEnv{engine: engine, fs: fs, agent: ag, clock: clock}
 }
 

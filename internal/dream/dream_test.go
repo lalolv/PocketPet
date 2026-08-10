@@ -40,7 +40,7 @@ func setup(t *testing.T) *testEnv {
 	fs := petfs.New(t.TempDir())
 	engine := tick.NewEngine(st, nil, time.Minute, 24*time.Hour, clock)
 	env := &testEnv{st: st, fs: fs, engine: engine, clock: clock}
-	org := NewOrganizer(fs, st, llm.ProviderConfig{})
+	org := NewOrganizer(fs, st, llm.Config{})
 	org.Now = clock.Now
 	org.Emitter = func(_ context.Context, evs ...pet.Event) {
 		env.mu.Lock()
@@ -457,30 +457,23 @@ func TestOrganizeUnconfiguredLLM(t *testing.T) {
 	}
 }
 
-// TestResolveCfgWithResolver 验证梦境整理的命名 provider 解析（与 chat 同一规则）。
-func TestResolveCfgWithResolver(t *testing.T) {
+// TestResolveCfgModelOverride 验证梦境整理的 model 覆盖（与 chat 同一规则）。
+func TestResolveCfgModelOverride(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t, "lively")
+	env.org.cfg = llm.Config{Model: "global-model", APIKey: "k"}
 
-	resolver, err := llm.NewResolver(map[string]llm.ProviderConfig{
-		"deepseek": {Provider: llm.ProviderOpenAIChat, Model: "deepseek-chat", APIKey: "ds-key"},
-	}, "deepseek", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "env-key"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	env.org.Resolver = resolver
-
-	// 无 AGENT.md 覆盖 → 命名默认
+	// 无 AGENT.md 覆盖 → 跟随全局
 	cfg := env.org.resolveCfg(p.ID)
-	if cfg.Provider != llm.ProviderOpenAIChat || cfg.APIKey != "ds-key" {
-		t.Fatalf("named default = %+v", cfg)
+	if cfg.Model != "global-model" || cfg.APIKey != "k" {
+		t.Fatalf("default = %+v", cfg)
 	}
-	// AGENT.md 写类型名 → 回退默认连接参数
-	if err := env.fs.Write(p.ID, petfs.FileAgent, "---\nprovider: gemini\nmodel: \"\"\nmcp: \"\"\n---\n"); err != nil {
+	// AGENT.md 写 model → 覆盖
+	if err := env.fs.Write(p.ID, petfs.FileAgent, "---\nmodel: pet-model\nmcp: \"\"\n---\n"); err != nil {
 		t.Fatal(err)
 	}
 	cfg = env.org.resolveCfg(p.ID)
-	if cfg.Provider != llm.ProviderGemini || cfg.APIKey != "ds-key" {
-		t.Fatalf("type fallback = %+v", cfg)
+	if cfg.Model != "pet-model" || cfg.APIKey != "k" {
+		t.Fatalf("model override = %+v", cfg)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lalolv/PocketPet/internal/llm"
 )
 
 // writeYAML 写一个临时配置文件并返回路径。
@@ -32,13 +34,15 @@ func TestDefaultsPureEnv(t *testing.T) {
 		cfg.DataRoot != "data" || cfg.SkillsDir != "skills" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if len(cfg.LLMProviders) != 0 || cfg.LLMDefault != "" {
-		t.Fatalf("llm = %q %+v", cfg.LLMDefault, cfg.LLMProviders)
+	if len(cfg.MCPServers) != 0 {
+		t.Fatalf("mcp = %+v", cfg.MCPServers)
+	}
+	if cfg.LLM != (llm.Config{}) {
+		t.Fatalf("llm = %+v", cfg.LLM)
 	}
 }
 
 func TestFileLoading(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "sk-test-123")
 	path := writeYAML(t, `
 server:
   listen: ":9999"
@@ -48,17 +52,9 @@ tick:
   interval_seconds: 5
   offline_catchup_max_hours: 12
 llm:
-  default: deepseek
-  providers:
-    deepseek:
-      provider: openai-chat
-      model: deepseek-chat
-      base_url: https://api.deepseek.com/v1
-      api_key_env: DEEPSEEK_API_KEY
-    gpt:
-      provider: openai-compatible
-      model: gpt-4o-mini
-      api_key_env: NO_SUCH_ENV_VAR
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com/v1
+  api_key: sk-test-123
 mcp:
   servers:
     - name: weather
@@ -78,17 +74,9 @@ mcp:
 	if cfg.TickInterval != 5*time.Second || cfg.OfflineMax != 12*time.Hour {
 		t.Fatalf("tick = %v %v", cfg.TickInterval, cfg.OfflineMax)
 	}
-	if cfg.LLMDefault != "deepseek" {
-		t.Fatalf("LLMDefault = %q", cfg.LLMDefault)
-	}
-	ds := cfg.LLMProviders["deepseek"]
-	if ds.Provider != "openai-chat" || ds.Model != "deepseek-chat" ||
-		ds.BaseURL != "https://api.deepseek.com/v1" || ds.APIKey != "sk-test-123" {
-		t.Fatalf("deepseek = %+v", ds)
-	}
-	// api_key_env 指向缺失变量 → APIKey 为空（按未配置降级）
-	if cfg.LLMProviders["gpt"].APIKey != "" {
-		t.Fatalf("gpt api key should be empty: %+v", cfg.LLMProviders["gpt"])
+	if cfg.LLM.Model != "deepseek-v4-flash" || cfg.LLM.BaseURL != "https://api.deepseek.com/v1" ||
+		cfg.LLM.APIKey != "sk-test-123" {
+		t.Fatalf("llm = %+v", cfg.LLM)
 	}
 	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "weather" ||
 		cfg.MCPServers[0].Command != "/bin/weather" || len(cfg.MCPServers[0].Args) != 2 {
@@ -157,24 +145,5 @@ func TestBadFileErrors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.yaml")
 	if _, err := Load(missing); err == nil || !strings.Contains(err.Error(), "nope.yaml") {
 		t.Fatalf("missing file err = %v", err)
-	}
-}
-
-func TestAPIKeyDirectWarns(t *testing.T) {
-	path := writeYAML(t, `
-llm:
-  providers:
-    x:
-      provider: gemini
-      model: gemini-2.5-flash
-      api_key: sk-direct
-`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 直写 api_key 支持但告警（行为上 APIKey 生效）
-	if cfg.LLMProviders["x"].APIKey != "sk-direct" {
-		t.Fatalf("api_key direct = %+v", cfg.LLMProviders["x"])
 	}
 }

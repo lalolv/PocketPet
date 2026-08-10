@@ -199,7 +199,7 @@ func TestInventoryRoute(t *testing.T) {
 	}
 
 	hub := api.NewHub()
-	ag := agent.New(env.engine, env.fs, llm.ProviderConfig{})
+	ag := agent.New(env.engine, env.fs, llm.Config{})
 	srv := api.NewServer(env.st, env.engine, hub, env.fs, ag)
 	srv.RegisterPluginRoutes(env.adv.Name(), env.adv.Routes())
 	ts := httptest.NewServer(srv.Handler())

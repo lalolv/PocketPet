@@ -26,7 +26,7 @@ var ErrBadReflectOutput = errors.New("dream: unparseable reflect output")
 // 不强制 response_mime_type——部分 OpenAI 兼容端点不支持，
 // 解析端已做容错（提取首个 JSON 对象），失败按 ErrBadReflectOutput 静默跳过。
 type LLMReflector struct {
-	Cfg llm.ProviderConfig
+	Cfg llm.Config
 }
 
 // Reflect 实现 Reflector。

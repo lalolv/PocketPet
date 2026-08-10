@@ -13,6 +13,10 @@ tick:
   interval_seconds: 60        # tick 结算间隔
   offline_catchup_max_hours: 24  # 离线补算时长上限
 
+log:
+  level: info   # 日志级别：debug / info / warn / error；也可用 POCKETPET_LOG_LEVEL 覆盖。
+                # 终端运行时日志自动彩色显示；重定向到文件/管道时自动关闭颜色（NO_COLOR 可强制关闭）。
+
 llm:
   # 任意 OpenAI Chat Completions 兼容端点（OpenAI 官方 / DeepSeek / Moonshot / vLLM / Ollama 等）。
   # model 与 api_key 必填；base_url 留空 = OpenAI 官方地址。密钥直接写在这里。

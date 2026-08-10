@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
@@ -61,10 +62,10 @@ type Options struct {
 
 // PetAgent 管理全部宠物的 Agent 运行时（petID → runner，惰性创建，线程安全）。
 type PetAgent struct {
-	engine   *tick.Engine
-	fs       *petfs.FS
-	cfg      llm.Config // 全局 LLM 配置（运行期可被替换，如测试注入假端点）
-	opts     Options
+	engine *tick.Engine
+	fs     *petfs.FS
+	cfg    llm.Config // 全局 LLM 配置（运行期可被替换，如测试注入假端点）
+	opts   Options
 
 	mu        sync.Mutex
 	runners   map[string]*cachedRunner
@@ -151,6 +152,8 @@ func (a *PetAgent) run(ctx context.Context, petID, message string, streaming boo
 			yield(deadLine, nil)
 			return
 		}
+		start := time.Now()
+		slog.Info("agent: chat", "pet", petID, "streaming", streaming, "msg_runes", len([]rune(message)))
 		if _, err := a.EnsureFiles(p); err != nil {
 			// 文件缺失不阻断对话（指令装配会容忍缺文件），只记录。
 			slog.Warn("agent: ensure petfs files failed", "pet", petID, "err", err)
@@ -218,6 +221,7 @@ func (a *PetAgent) run(ctx context.Context, petID, message string, streaming boo
 			a.yieldFallback(yield, p)
 			return
 		}
+		slog.Debug("agent: llm reply", "pet", petID, "duration", time.Since(start).Round(time.Millisecond))
 		// 非流式（或模型没产流式块）：回复来自最终聚合事件。
 		if !sawPartial {
 			if strings.TrimSpace(finalText.String()) == "" {
@@ -305,6 +309,8 @@ func (a *PetAgent) runnerFor(ctx context.Context, p *pet.Pet) (*cachedRunner, er
 	}
 	cr := &cachedRunner{r: r, ag: ag, fingerprint: fingerprint}
 	a.runners[p.ID] = cr
+	slog.Info("agent: runner built", "pet", p.ID, "model", cfg.Model,
+		"mcp_servers", spec.MCPServers, "tools", len(tools))
 	return cr, nil
 }
 

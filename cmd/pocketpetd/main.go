@@ -36,6 +36,7 @@ func main() {
 		slog.Error("load config failed", "err", err)
 		os.Exit(1)
 	}
+	setupLogging(cfg.LogLevel)
 	llmCfg := cfg.LLM
 
 	slog.Info("starting pocketpetd",
@@ -45,6 +46,7 @@ func main() {
 		"offline_max", cfg.OfflineMax,
 		"db", cfg.DBPath,
 		"data_dir", cfg.DataRoot,
+		"log_level", orNone(cfg.LogLevel),
 		"llm_model", orNone(llmCfg.Model),
 		"llm_base_url", orNone(llmCfg.BaseURL),
 	)
@@ -111,6 +113,7 @@ func main() {
 	}
 	go func() {
 		<-ctx.Done()
+		slog.Info("shutting down pocketpetd")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {

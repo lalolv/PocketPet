@@ -28,6 +28,7 @@ const (
 	EnvDataDir      = "POCKETPET_DATA_DIR"      // 数据根目录（petfs 宠物文件在其 pets/ 子目录下）
 	EnvSkillsDir    = "POCKETPET_SKILLS_DIR"    // 全局技能目录（SKILL.md 技能包，对所有宠物可见）
 	EnvMCPServers   = "POCKETPET_MCP_SERVERS"   // 全局可用 MCP servers，JSON 数组
+	EnvLogLevel     = "POCKETPET_LOG_LEVEL"     // 日志级别：debug / info / warn / error
 )
 
 // 默认探测的配置文件路径（按顺序）。
@@ -61,6 +62,9 @@ type Config struct {
 	// env JSON 非空时整体覆盖文件列表（与"环境变量 > 配置文件"优先级一致）。
 	MCPServers []MCPServer
 
+	// LogLevel 是日志级别（debug / info / warn / error），默认 info。
+	LogLevel string
+
 	// LLM 是全局 LLM 连接配置（yaml llm 段）；零值 = 未配置，chat 走降级文案。
 	LLM llm.Config
 
@@ -88,6 +92,9 @@ type fileConfig struct {
 	MCP struct {
 		Servers []MCPServer `yaml:"servers"`
 	} `yaml:"mcp"`
+	Log struct {
+		Level string `yaml:"level"`
+	} `yaml:"log"`
 }
 
 // Load 加载配置：flagPath 为 -config 启动参数（空则按规则探测）。
@@ -165,6 +172,9 @@ func (cfg *Config) applyFile(path string) error {
 	if len(fc.MCP.Servers) > 0 {
 		cfg.MCPServers = fc.MCP.Servers
 	}
+	if fc.Log.Level != "" {
+		cfg.LogLevel = fc.Log.Level
+	}
 
 	// LLM 连接配置：扁平单端点（OpenAI Chat Completions 兼容），密钥直接写在文件里。
 	cfg.LLM = llm.Config{
@@ -198,6 +208,9 @@ func (cfg *Config) applyEnv() {
 	}
 	if v := os.Getenv(EnvSkillsDir); v != "" {
 		cfg.SkillsDir = v
+	}
+	if v := os.Getenv(EnvLogLevel); v != "" {
+		cfg.LogLevel = v
 	}
 	if v := os.Getenv(EnvMCPServers); v != "" {
 		var servers []MCPServer

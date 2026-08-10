@@ -114,6 +114,7 @@ func (e *Engine) TickAll(ctx context.Context) {
 			slog.Error("tick: settle failed", "pet", p.ID, "err", err)
 		}
 	}
+	slog.Debug("tick: settled all pets", "pets", len(pets))
 	e.mu.Lock()
 	hooks := append([]TickHook(nil), e.hooks...)
 	e.mu.Unlock()
@@ -135,6 +136,7 @@ func (e *Engine) CreatePet(ctx context.Context, name, species string) (*pet.Pet,
 	if err := e.store.SavePet(ctx, p); err != nil {
 		return nil, err
 	}
+	slog.Info("pet born", "pet", id, "name", name, "species", species)
 	e.emit(ctx, []pet.Event{{PetID: id, Type: pet.EventBorn,
 		Message: name + " 出生了，是一只 " + species, CreatedAt: e.clock.Now()}})
 	return p, nil
@@ -188,6 +190,7 @@ func (e *Engine) Care(ctx context.Context, id string, action pet.Action) (*pet.P
 	if err := e.store.SavePet(ctx, p); err != nil {
 		return nil, err
 	}
+	slog.Info("care action applied", "pet", id, "action", action)
 	e.emit(ctx, append(evs, careEvs...))
 	return p, nil
 }
@@ -227,6 +230,7 @@ func (e *Engine) emit(ctx context.Context, evs []pet.Event) {
 			continue
 		}
 		ev.ID = id
+		slog.Info("event", "pet", ev.PetID, "type", ev.Type, "msg", ev.Message)
 		if e.sink != nil {
 			e.sink.Publish(ev)
 		}

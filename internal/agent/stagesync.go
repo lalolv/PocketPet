@@ -35,5 +35,7 @@ func (s *StageSync) Publish(e pet.Event) {
 	}
 	if err := s.fs.UpdateStage(e.PetID, string(p.Stage)); err != nil {
 		slog.Warn("stage sync: update PET.md failed", "pet", e.PetID, "err", err)
+		return
 	}
+	slog.Debug("stage sync: PET.md updated", "pet", e.PetID, "stage", p.Stage)
 }

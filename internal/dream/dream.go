@@ -99,6 +99,7 @@ func (o *Organizer) Publish(e pet.Event) {
 	}
 	o.pending[e.PetID] = true
 	o.mu.Unlock()
+	slog.Info("dream: pet fell asleep, organizing", "pet", e.PetID)
 
 	// 便签立即写好：即使整理失败或未配置 LLM，醒来后的第一次对话也能提及睡眠。
 	if err := o.fs.WriteWakeNote(e.PetID, basicWakeNote+"\n"); err != nil {
@@ -134,6 +135,7 @@ func (o *Organizer) Organize(ctx context.Context, petID string) error {
 	if ref == nil {
 		cfg := o.resolveCfg(petID)
 		if !cfg.Configured() {
+			slog.Debug("dream: llm not configured, skip organize", "pet", petID)
 			return nil // 未配置 LLM：静默跳过
 		}
 		ref = &LLMReflector{Cfg: cfg}
@@ -195,12 +197,15 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 	}
 	var evs []pet.Event
 	note := basicWakeNote
+	var memoryUpdated, soulEvolved, dreamed bool
+	var skillLearned string
 
 	// 1. 凝练：LLM 给出完整新版 MEMORY.md 才替换。
 	if mu := strings.TrimSpace(res.MemoryUpdate); mu != "" && mu != strings.TrimSpace(req.Memory) {
 		if err := o.fs.Write(p.ID, petfs.FileMemory, strings.TrimRight(res.MemoryUpdate, "\n")+"\n"); err != nil {
 			slog.Warn("dream: write memory failed", "pet", p.ID, "err", err)
 		} else {
+			memoryUpdated = true
 			note += "\n你趁睡觉把最近的事整理进了长期记忆。"
 		}
 	}
@@ -217,6 +222,7 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 				if err := o.fs.WriteSoulWithHistory(p.ID, petfs.RenderSoul(newDoc), now); err != nil {
 					slog.Warn("dream: write soul failed", "pet", p.ID, "err", err)
 				} else {
+					soulEvolved = true
 					evs = append(evs, pet.Event{PetID: p.ID, Type: pet.EventSoulChanged,
 						Message: p.Name + " 的性格发生了一些变化", CreatedAt: now})
 				}
@@ -231,6 +237,7 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 		err := o.fs.WriteSkill(p.ID, draft.Name, renderSkillMD(draft))
 		switch {
 		case err == nil:
+			skillLearned = draft.Name
 			evs = append(evs, pet.Event{PetID: p.ID, Type: pet.EventSkillLearned,
 				Message: p.Name + " 学会了新技能「" + draft.Name + "」", CreatedAt: now})
 		case errors.Is(err, petfs.ErrExists), errors.Is(err, petfs.ErrInvalidName):
@@ -245,6 +252,7 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 		if err := o.fs.AppendJournal(p.ID, "做梦："+d, now); err != nil {
 			slog.Warn("dream: append dream journal failed", "pet", p.ID, "err", err)
 		}
+		dreamed = true
 		evs = append(evs, pet.Event{PetID: p.ID, Type: pet.EventDream, Message: d, CreatedAt: now})
 		note += "\n你做了一个梦：" + truncateRunes(d, dreamNoteMaxRunes)
 	}
@@ -256,6 +264,12 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 	if o.Emitter != nil && len(evs) > 0 {
 		o.Emitter(ctx, evs...)
 	}
+	slog.Info("dream: organized", "pet", p.ID,
+		"memory_updated", memoryUpdated,
+		"soul_evolved", soulEvolved,
+		"skill_learned", skillLearned,
+		"dreamed", dreamed,
+	)
 }
 
 // evolveSoul 计算护栏约束下的新版 SOUL：特质只调已有键、单步钳制 ±maxTraitStep、

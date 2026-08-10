@@ -112,10 +112,16 @@ func (m model) renderMain() string {
 	for _, l := range m.logs {
 		b.WriteString(l + "\n")
 	}
+	// 流式回复：未收到的部分以光标占位。
+	if m.streaming {
+		b.WriteString(inputStyle.Render(m.pet.Name + "：" + m.streamBuf + "▌") + "\n")
+	}
 
 	// 底部帮助 / 输入行
 	if m.chatMode {
 		b.WriteString(inputStyle.Render("> "+m.input+"█") + faintStyle.Render("  （enter 发送，esc 取消）") + "\n")
+	} else if m.streaming {
+		b.WriteString(faintStyle.Render("回复中…… [esc] 中断") + "\n")
 	} else if !m.pet.Alive {
 		b.WriteString(faintStyle.Render("[r] 刷新    [q] 退出") + "\n")
 	} else {

@@ -73,6 +73,12 @@ type model struct {
 	sseCancel  context.CancelFunc
 	petLoading bool // 首次进入主界面尚未拿到状态
 
+	// 流式聊天
+	streaming  bool              // 正在接收回复流
+	streamBuf  string            // 已收到的部分回复
+	chatCh     chan chatEvent    // 聊天流通道
+	chatCancel context.CancelFunc // esc 中断流
+
 	offline string // 离线原因（screenOffline 展示）
 
 	width, height int
@@ -90,7 +96,7 @@ type (
 	petsMsg       []Pet     // 宠物列表
 	petMsg        Pet       // 宠物状态（get/care 响应）
 	createdMsg    Pet       // 创建成功
-	replyMsg      string    // chat 回复
+	chatEventMsg  chatEvent // 聊天流事件
 	eventMsg      Event     // SSE 事件
 	errMsg        errorWrap // 错误（含来源）
 	careResultMsg struct {
@@ -98,6 +104,14 @@ type (
 		action string
 	}
 )
+
+// chatEvent 是聊天流上的一条消息：文本块、结束（含完整回复）或错误。
+type chatEvent struct {
+	chunk string // 文本块
+	reply string // done 时的完整回复
+	done  bool   // 流正常结束
+	err   error  // 流失败
+}
 
 type errorWrap struct {
 	where string
@@ -158,13 +172,43 @@ func careCmd(c *Client, id, action string) tea.Cmd {
 	}
 }
 
-func chatCmd(c *Client, id, message string) tea.Cmd {
-	return func() tea.Msg {
-		reply, err := c.Chat(context.Background(), id, message)
-		if err != nil {
-			return errMsg{"chat", err}
+// startChat 启动流式聊天：goroutine 拉 SSE 写入通道，waitChatCmd 逐条喂回模型。
+// 断线不重连（重发会重复扣 LLM 调用），失败时已收到的部分保留进日志。
+func (m *model) startChat(text string) tea.Cmd {
+	m.streaming = true
+	m.streamBuf = ""
+	ch := make(chan chatEvent, 16)
+	m.chatCh = ch
+	ctx, cancel := context.WithCancel(context.Background())
+	m.chatCancel = cancel
+	go func() {
+		defer close(ch)
+		send := func(ev chatEvent) {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+			}
 		}
-		return replyMsg(reply)
+		reply, err := m.client.ChatStream(ctx, m.pet.ID, text, func(chunk string) {
+			send(chatEvent{chunk: chunk})
+		})
+		if err != nil {
+			send(chatEvent{err: err})
+			return
+		}
+		send(chatEvent{done: true, reply: reply})
+	}()
+	return waitChatCmd(ch)
+}
+
+// waitChatCmd 从聊天流通道取一条消息；通道关闭时返回 nil（不产生消息）。
+func waitChatCmd(ch <-chan chatEvent) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return chatEventMsg(ev)
 	}
 }
 
@@ -238,8 +282,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logf("✔ %s", actionLabel(msg.action))
 		return m, nil
 
-	case replyMsg:
-		m.logf("%s：%s", m.pet.Name, string(msg))
+	case chatEventMsg:
+		ev := chatEvent(msg)
+		if ev.chunk != "" {
+			m.streamBuf += ev.chunk
+			return m, waitChatCmd(m.chatCh)
+		}
+		// 流结束（done/err）：定稿回复并退出流式态。
+		m.streaming = false
+		m.chatCancel = nil
+		switch {
+		case ev.err != nil:
+			if m.streamBuf != "" {
+				m.logf("%s：%s …", m.pet.Name, m.streamBuf)
+			}
+			m.logf("✗ %s", friendlyErr(ev.err))
+		case ev.reply != "":
+			m.logf("%s：%s", m.pet.Name, ev.reply)
+		case m.streamBuf != "":
+			// 中断（esc）或空回复：保留已收到的部分。
+			m.logf("%s：%s …", m.pet.Name, m.streamBuf)
+		}
+		m.streamBuf = ""
 		return m, nil
 
 	case eventMsg:
@@ -267,6 +331,12 @@ func (m model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+	} else if k.Code == tea.KeyEscape && m.streaming {
+		// 中断聊天流：取消后由 done/err 消息收尾。
+		if m.chatCancel != nil {
+			m.chatCancel()
+		}
+		return m, nil
 	} else if k.Text == "q" {
 		m.shutdown()
 		return m, tea.Quit
@@ -374,7 +444,7 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.logf("我：%s", text)
-			return m, chatCmd(m.client, m.pet.ID, text)
+			return m, m.startChat(text)
 		case tea.KeyBackspace:
 			if m.input != "" {
 				r := []rune(m.input)
@@ -408,6 +478,9 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "w":
 		return m, careCmd(m.client, m.pet.ID, "wake")
 	case "t":
+		if m.streaming {
+			return m, nil // 流式回复中，忽略新聊天
+		}
 		m.chatMode = true
 		m.input = ""
 		return m, nil
@@ -487,10 +560,13 @@ func (m *model) startSSE() tea.Cmd {
 	return waitEventCmd(ch)
 }
 
-// shutdown 释放 SSE 资源（退出时调用）。
+// shutdown 释放 SSE 与聊天流资源（退出时调用）。
 func (m *model) shutdown() {
 	if m.sseCancel != nil {
 		m.sseCancel()
+	}
+	if m.chatCancel != nil {
+		m.chatCancel()
 	}
 }
 

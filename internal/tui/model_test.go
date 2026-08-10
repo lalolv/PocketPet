@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -166,7 +167,7 @@ func TestStageUpCelebrates(t *testing.T) {
 	}
 }
 
-// TestChatFlow 验证聊天输入模式。
+// TestChatFlow 验证流式聊天：输入 → 流式渲染 → 定稿进日志。
 func TestChatFlow(t *testing.T) {
 	m := NewModel(NewClient("http://unused"))
 	m.screen = screenMain
@@ -182,14 +183,55 @@ func TestChatFlow(t *testing.T) {
 	if m.input != "你" {
 		t.Fatalf("input = %q", m.input)
 	}
-	_, cmd := m.Update(keyOf("enter"))
-	if cmd == nil {
-		t.Fatal("enter should send chat")
+	m2, cmd := m.Update(keyOf("enter"))
+	m = m2.(model)
+	if cmd == nil || !m.streaming {
+		t.Fatal("enter should start streaming chat")
 	}
-	m = update(t, m, replyMsg("哼，你好呀"))
+	// 流式期间忽略新的聊天请求
+	m = update(t, m, keyOf("t"))
+	if m.chatMode {
+		t.Fatal("t should be ignored while streaming")
+	}
+	// 文本块逐步上屏
+	m = update(t, m, chatEventMsg{chunk: "哼，"})
+	m = update(t, m, chatEventMsg{chunk: "你好呀"})
+	if v := m.renderString(); !strings.Contains(v, "团团：哼，你好呀▌") {
+		t.Fatalf("streaming view:\n%s", v)
+	}
+	// done 定稿进日志
+	m = update(t, m, chatEventMsg{done: true, reply: "哼，你好呀"})
 	last := m.logs[len(m.logs)-1]
 	if !strings.Contains(last, "团团：哼，你好呀") {
 		t.Fatalf("reply log = %q", last)
+	}
+	if m.streaming || m.streamBuf != "" {
+		t.Fatal("stream should be finalized")
+	}
+}
+
+// TestChatStreamInterrupt 验证流式聊天可中断：esc 取消，已收到部分保留进日志。
+func TestChatStreamInterrupt(t *testing.T) {
+	m := NewModel(NewClient("http://unused"))
+	m.screen = screenMain
+	m.pet = testPet()
+	m.streaming = true
+	ctx, cancel := context.WithCancel(context.Background())
+	m.chatCancel = cancel
+
+	m = update(t, m, chatEventMsg{chunk: "我想说"})
+	m = update(t, m, keyOf("esc"))
+	if ctx.Err() == nil {
+		t.Fatal("esc should cancel the stream")
+	}
+	// 取消后 done 到达：部分内容带省略号定稿
+	m = update(t, m, chatEventMsg{done: true})
+	last := m.logs[len(m.logs)-1]
+	if !strings.Contains(last, "团团：我想说 …") {
+		t.Fatalf("partial log = %q", last)
+	}
+	if m.streaming {
+		t.Fatal("stream should be finalized after done")
 	}
 }
 

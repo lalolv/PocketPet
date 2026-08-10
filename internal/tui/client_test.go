@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,39 @@ func TestClientREST(t *testing.T) {
 	_, err = c.GetPet(ctx, "nope")
 	if !errors.As(err, &ae) || ae.Code != "not_found" {
 		t.Fatalf("get nope err = %v", err)
+	}
+}
+
+func TestClientChatStream(t *testing.T) {
+	ts := newTestServer(t)
+	c := NewClient(ts.srv.URL)
+	ctx := context.Background()
+
+	p, err := c.CreatePet(ctx, "团团", "cat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 无 LLM 时服务端走降级文案，同样经流式逐块产出。
+	var chunks []string
+	reply, err := c.ChatStream(ctx, p.ID, "你好", func(text string) {
+		chunks = append(chunks, text)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply == "" || len(chunks) == 0 {
+		t.Fatalf("reply = %q, chunks = %v", reply, chunks)
+	}
+	if strings.Join(chunks, "") != reply {
+		t.Fatalf("chunks join = %q, want reply %q", strings.Join(chunks, ""), reply)
+	}
+
+	// 不存在的宠物：SSE 头之前返回标准错误格式。
+	_, err = c.ChatStream(ctx, "nope", "你好", func(string) {})
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != "not_found" {
+		t.Fatalf("stream nope err = %v", err)
 	}
 }
 

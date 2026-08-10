@@ -161,32 +161,42 @@ func jsonString(s string) string {
 	return string(b)
 }
 
-// WatchEvents 订阅某宠物的 SSE 事件流，把解析出的事件写入 ch。
-// 阻塞运行：正常返回 nil 只发生在 ctx 取消时；连接断开/读失败返回错误（由调用方重连）。
-// 调用方应负责 close(ch)。
-func (c *Client) WatchEvents(ctx context.Context, id string, ch chan<- Event) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/v1/pets/"+id+"/events", nil)
-	if err != nil {
-		return err
+// openStream 发起一个 SSE 请求并校验响应状态。
+// SSE 是长连接：不用带超时的客户端。4xx/5xx 错误体解码为 *APIError。
+func (c *Client) openStream(ctx context.Context, method, path, payload string) (*http.Response, error) {
+	var rdr io.Reader
+	if payload != "" {
+		rdr = strings.NewReader(payload)
 	}
-	// SSE 是长连接：不用带超时的客户端。
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
+	if err != nil {
+		return nil, err
+	}
+	if payload != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
 		var b struct {
 			Error APIError `json:"error"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&b); err == nil && b.Error.Code != "" {
 			b.Error.Status = resp.StatusCode
-			return &b.Error
+			return nil, &b.Error
 		}
-		return &APIError{Status: resp.StatusCode, Code: "http_error", Message: resp.Status}
+		return nil, &APIError{Status: resp.StatusCode, Code: "http_error", Message: resp.Status}
 	}
+	return resp, nil
+}
 
-	scanner := bufio.NewReader(resp.Body)
+// scanSSE 逐帧扫描 SSE 流：每个完整事件（空行分隔）回调 fn(event, data)。
+// fn 返回 false 提前终止。ctx 取消时返回 nil；读失败返回错误。
+func scanSSE(ctx context.Context, body io.Reader, fn func(evType, data string) bool) error {
+	scanner := bufio.NewReader(body)
 	var evType, dataLine string
 	for {
 		line, err := scanner.ReadString('\n')
@@ -203,18 +213,81 @@ func (c *Client) WatchEvents(ctx context.Context, id string, ch chan<- Event) er
 		case strings.HasPrefix(line, "data: "):
 			dataLine = strings.TrimPrefix(line, "data: ")
 		case line == "":
-			// 事件边界：解析并投递。
-			if evType != "" && dataLine != "" {
-				var ev Event
-				if err := json.Unmarshal([]byte(dataLine), &ev); err == nil {
-					select {
-					case ch <- ev:
-					case <-ctx.Done():
-						return nil
-					}
-				}
+			// 事件边界：回调处理。
+			if evType != "" && dataLine != "" && !fn(evType, dataLine) {
+				return nil
 			}
 			evType, dataLine = "", ""
 		}
 	}
+}
+
+// WatchEvents 订阅某宠物的 SSE 事件流，把解析出的事件写入 ch。
+// 阻塞运行：正常返回 nil 只发生在 ctx 取消时；连接断开/读失败返回错误（由调用方重连）。
+// 调用方应负责 close(ch)。
+func (c *Client) WatchEvents(ctx context.Context, id string, ch chan<- Event) error {
+	resp, err := c.openStream(ctx, http.MethodGet, "/v1/pets/"+id+"/events", "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return scanSSE(ctx, resp.Body, func(_, data string) bool {
+		var ev Event
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// ChatStream 以 SSE 流式聊天：每个文本块回调 onChunk，返回完整回复。
+// 服务端流内错误（event: error）以 *APIError 返回；已回调的块不回撤。
+// ctx 取消时静默结束（返回空回复与 nil）。
+func (c *Client) ChatStream(ctx context.Context, id, message string, onChunk func(string)) (string, error) {
+	resp, err := c.openStream(ctx, http.MethodPost, "/v1/pets/"+id+"/chat?stream=true",
+		fmt.Sprintf(`{"message":%s}`, jsonString(message)))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var full, errText string
+	serr := scanSSE(ctx, resp.Body, func(evType, data string) bool {
+		switch evType {
+		case "chunk":
+			var b struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal([]byte(data), &b) == nil && b.Text != "" {
+				onChunk(b.Text)
+			}
+			return true
+		case "done":
+			var b struct {
+				Reply string `json:"reply"`
+			}
+			if json.Unmarshal([]byte(data), &b) == nil {
+				full = b.Reply
+			}
+		case "error":
+			var b struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal([]byte(data), &b) == nil {
+				errText = b.Message
+			}
+		}
+		return false // done/error 后不再读
+	})
+	if serr != nil {
+		return "", serr
+	}
+	if errText != "" {
+		return "", &APIError{Code: "stream_error", Message: errText}
+	}
+	return full, nil
 }

@@ -1,6 +1,7 @@
-# PocketPet 配置文件示例。复制为 pocketpet.yaml（仓库根）或直接用 -config 指定。
+# PocketPet 配置文件示例。复制为 configs/pocketpet.yaml 或仓库根的 pocketpet.yaml 后按需修改，
+# 也可以用 -config 指定任意路径。
 # 优先级：启动参数 > 环境变量 > 本文件 > 默认值。
-# 真实 pocketpet.yaml 已在 .gitignore 中（不要提交含密钥引用的个人配置）。
+# 真实的 pocketpet.yaml（根目录及 configs/ 下）已在 .gitignore 中（不要提交含密钥引用的个人配置）。
 
 server:
   listen: ":8080"

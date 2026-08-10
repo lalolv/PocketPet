@@ -25,6 +25,9 @@ PocketPet 是一个 Agent 原生的虚拟宠物项目：主人直接和宠物第
 git clone https://github.com/lalolv/PocketPet.git
 cd PocketPet
 
+# 准备本地配置（该文件已在 .gitignore 中，不会被提交）
+cp configs/pocketpet.example.yaml configs/pocketpet.yaml
+
 # 启动后端（未配置 LLM 也能跑，chat 走降级文案）
 go run ./cmd/pocketpetd -config configs/pocketpet.yaml
 
@@ -60,7 +63,7 @@ curl -X POST localhost:8080/v1/pets/{id}/care \
 
 ## 配置
 
-配置优先级：启动参数 `-config` > 环境变量 > 配置文件 > 默认值。示例见 [configs/pocketpet.yaml](configs/pocketpet.yaml)。
+配置优先级：启动参数 `-config` > 环境变量 > 配置文件 > 默认值。示例见 [configs/pocketpet.example.yaml](configs/pocketpet.example.yaml)。
 
 配置 LLM（任选其一）：
 

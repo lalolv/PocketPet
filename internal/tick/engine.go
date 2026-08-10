@@ -21,6 +21,12 @@ type EventSink interface {
 	Publish(e pet.Event)
 }
 
+// StateSink 接收宠物最新状态快照：每次结算/动作落库后调用，
+// 供 SSE 状态帧等订阅方使用。实现方必须非阻塞（在 petID 锁内调用）。
+type StateSink interface {
+	PublishState(p *pet.Pet)
+}
+
 // MultiSink 把事件扇出给多个订阅方（如 SSE hub 与 petfs 阶段同步器），
 // 让 Engine 保持单订阅方接口不变。
 type MultiSink []EventSink
@@ -44,6 +50,7 @@ type TickHook interface {
 type Engine struct {
 	store      *store.Store
 	sink       EventSink // 可为 nil（仅落库不推送）
+	stateSink  StateSink // 可为 nil（不推状态快照）
 	interval   time.Duration
 	offlineMax time.Duration
 	clock      pet.Clock
@@ -99,6 +106,16 @@ func (e *Engine) AddTickHook(h TickHook) {
 	e.hooks = append(e.hooks, h)
 }
 
+// SetStateSink 注册状态快照订阅方（如 SSE hub；应在 Run 前完成设置）。
+func (e *Engine) SetStateSink(s StateSink) { e.stateSink = s }
+
+// publishState 把最新状态快照推给订阅方（若有）。
+func (e *Engine) publishState(p *pet.Pet) {
+	if e.stateSink != nil {
+		e.stateSink.PublishState(p)
+	}
+}
+
 // TickAll 对全部存活宠物结算一次（Run 每周期调用；测试可直接调用）。
 func (e *Engine) TickAll(ctx context.Context) {
 	pets, err := e.store.ListPets(ctx)
@@ -139,6 +156,7 @@ func (e *Engine) CreatePet(ctx context.Context, name, species string) (*pet.Pet,
 	slog.Info("pet born", "pet", id, "name", name, "species", species)
 	e.emit(ctx, []pet.Event{{PetID: id, Type: pet.EventBorn,
 		Message: name + " 出生了，是一只 " + species, CreatedAt: e.clock.Now()}})
+	e.publishState(p)
 	return p, nil
 }
 
@@ -165,6 +183,7 @@ func (e *Engine) settle(ctx context.Context, id string) (*pet.Pet, error) {
 		return nil, err
 	}
 	e.emit(ctx, evs)
+	e.publishState(p)
 	return p, nil
 }
 
@@ -185,6 +204,7 @@ func (e *Engine) Care(ctx context.Context, id string, action pet.Action) (*pet.P
 		// 衰减部分已生效，保存后返回错误。
 		_ = e.store.SavePet(ctx, p)
 		e.emit(ctx, evs)
+		e.publishState(p)
 		return nil, err
 	}
 	if err := e.store.SavePet(ctx, p); err != nil {
@@ -192,6 +212,7 @@ func (e *Engine) Care(ctx context.Context, id string, action pet.Action) (*pet.P
 	}
 	slog.Info("care action applied", "pet", id, "action", action)
 	e.emit(ctx, append(evs, careEvs...))
+	e.publishState(p)
 	return p, nil
 }
 
@@ -212,6 +233,7 @@ func (e *Engine) Adjust(ctx context.Context, id string, delta pet.Stats) (*pet.P
 		return nil, err
 	}
 	e.emit(ctx, evs)
+	e.publishState(p)
 	return p, nil
 }
 

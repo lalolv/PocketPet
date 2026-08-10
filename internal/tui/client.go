@@ -44,6 +44,16 @@ type Event struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// PetState 是 SSE state 帧的载荷：随时间变化的字段快照（数值、阶段、睡/活标志）。
+// 不变字段（名字/物种/性格）不在帧内，收到后合并进本地 Pet。
+type PetState struct {
+	ID       string `json:"id"`
+	Stage    string `json:"stage"`
+	Sleeping bool   `json:"sleeping"`
+	Alive    bool   `json:"alive"`
+	Stats    Stats  `json:"stats"`
+}
+
 // APIError 是服务端统一错误格式 {"error":{"code","message"}} 的客户端投影。
 type APIError struct {
 	Status  int
@@ -222,20 +232,31 @@ func scanSSE(ctx context.Context, body io.Reader, fn func(evType, data string) b
 	}
 }
 
-// WatchEvents 订阅某宠物的 SSE 事件流，把解析出的事件写入 ch。
+// WatchEvents 订阅某宠物的 SSE 流，把解析出的事件写入 eventCh、状态快照写入 stateCh。
 // 阻塞运行：正常返回 nil 只发生在 ctx 取消时；连接断开/读失败返回错误（由调用方重连）。
-// 调用方应负责 close(ch)。
-func (c *Client) WatchEvents(ctx context.Context, id string, ch chan<- Event) error {
+// 调用方应负责 close 两个通道。
+func (c *Client) WatchEvents(ctx context.Context, id string, eventCh chan<- Event, stateCh chan<- PetState) error {
 	resp, err := c.openStream(ctx, http.MethodGet, "/v1/pets/"+id+"/events", "")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	return scanSSE(ctx, resp.Body, func(_, data string) bool {
+	return scanSSE(ctx, resp.Body, func(evType, data string) bool {
+		if evType == "state" {
+			var st PetState
+			if err := json.Unmarshal([]byte(data), &st); err == nil {
+				select {
+				case stateCh <- st:
+				case <-ctx.Done():
+					return false
+				}
+			}
+			return true
+		}
 		var ev Event
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {
 			select {
-			case ch <- ev:
+			case eventCh <- ev:
 			case <-ctx.Done():
 				return false
 			}

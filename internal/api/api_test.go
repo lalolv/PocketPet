@@ -406,19 +406,28 @@ func TestSSEReplayAndLive(t *testing.T) {
 		t.Fatalf("replayed event = %q, want pet.born", typ)
 	}
 
+	// 订阅后必收到状态快照帧（含数值），客户端据此免轮询刷新状态栏。
+	typ, data := readEvent()
+	if typ != "state" || !strings.Contains(data, `"stats"`) {
+		t.Fatalf("frame after replay = %q %s, want state with stats", typ, data)
+	}
+
 	// 实时推送：推进假时钟 12h（饱食度 70→10 跌破阈值），
-	// GET 触发即时结算 → pet.hungry 经 hub 推送
+	// GET 触发即时结算 → pet.hungry 经 hub 推送（前后可能夹带 state 帧）
 	env.clock.Advance(12 * time.Hour)
 	if status, _ := doJSON(t, "GET", env.srv.URL+"/v1/pets/"+id, ""); status != http.StatusOK {
 		t.Fatalf("get status = %d", status)
 	}
-	typ, data := readEvent()
-	if typ != pet.EventHungry {
-		t.Fatalf("live event = %q, want pet.hungry", typ)
+	for i := 0; i < 5; i++ {
+		typ, data = readEvent()
+		if typ == pet.EventHungry {
+			if !strings.Contains(data, `"type":"pet.hungry"`) {
+				t.Fatalf("live data = %s", data)
+			}
+			return
+		}
 	}
-	if !strings.Contains(data, `"type":"pet.hungry"`) {
-		t.Fatalf("live data = %s", data)
-	}
+	t.Fatal("no pet.hungry within 5 frames")
 }
 
 // TestSoulLock 验证 SOUL 锁定端点与 soul 响应中的 locked/history 字段（M3）。

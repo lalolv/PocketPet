@@ -13,7 +13,6 @@ import (
 // 节奏与容量常量。
 const (
 	frameDur        = 250 * time.Millisecond // 动画帧间隔
-	pollDur         = 4 * time.Second        // 状态轮询间隔（SSE 之外的兜底）
 	reconnectDur    = 2 * time.Second        // SSE 断线重连等待
 	maxLogs         = 7                      // 日志区保留条数
 	animActionTicks = 6                      // eat/play/clean 动作帧数
@@ -70,6 +69,7 @@ type model struct {
 	chatMode   bool
 	input      string
 	sseCh      chan Event
+	stateCh    chan PetState
 	sseCancel  context.CancelFunc
 	petLoading bool // 首次进入主界面尚未拿到状态
 
@@ -92,12 +92,12 @@ func NewModel(client *Client) model {
 // 消息类型。
 type (
 	tickMsg       time.Time // 动画帧
-	pollMsg       time.Time // 状态轮询
 	petsMsg       []Pet     // 宠物列表
 	petMsg        Pet       // 宠物状态（get/care 响应）
 	createdMsg    Pet       // 创建成功
 	chatEventMsg  chatEvent // 聊天流事件
 	eventMsg      Event     // SSE 事件
+	stateMsg      PetState  // SSE 状态快照
 	errMsg        errorWrap // 错误（含来源）
 	careResultMsg struct {
 		pet    Pet
@@ -120,15 +120,11 @@ type errorWrap struct {
 
 // Init 实现 tea.Model。
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadPetsCmd(m.client), frameTick(), pollTick())
+	return tea.Batch(loadPetsCmd(m.client), frameTick())
 }
 
 func frameTick() tea.Cmd {
 	return tea.Tick(frameDur, func(t time.Time) tea.Msg { return tickMsg(t) })
-}
-
-func pollTick() tea.Cmd {
-	return tea.Tick(pollDur, func(t time.Time) tea.Msg { return pollMsg(t) })
 }
 
 // 异步命令。
@@ -223,6 +219,17 @@ func waitEventCmd(ch <-chan Event) tea.Cmd {
 	}
 }
 
+// waitStateCmd 从状态快照通道取一帧；通道关闭时返回 nil（不产生消息）。
+func waitStateCmd(ch <-chan PetState) tea.Cmd {
+	return func() tea.Msg {
+		st, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return stateMsg(st)
+	}
+}
+
 // Update 实现 tea.Model。
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -242,12 +249,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.action, m.frame = animIdle, 0
 		}
 		return m, frameTick()
-
-	case pollMsg:
-		if m.screen == screenMain && m.pet.ID != "" && m.pet.Alive {
-			return m, tea.Batch(getPetCmd(m.client, m.pet.ID), pollTick())
-		}
-		return m, pollTick()
 
 	case petsMsg:
 		m.pets = msg
@@ -308,6 +309,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		return m.onEvent(Event(msg))
+
+	case stateMsg:
+		st := PetState(msg)
+		if st.ID == m.pet.ID {
+			m.pet.Stage = st.Stage
+			m.pet.Sleeping = st.Sleeping
+			m.pet.Alive = st.Alive
+			m.pet.Stats = st.Stats
+			m.petLoading = false
+		}
+		return m, waitStateCmd(m.stateCh)
 
 	case errMsg:
 		return m.onError(msg)
@@ -490,7 +502,8 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onEvent 处理一条 SSE 事件：进日志 + 同步动画/状态。
+// onEvent 处理一条 SSE 事件：进日志 + 同步动画/标志。
+// 数值与阶段由随后的 state 帧刷新（结算/动作后服务端必推），这里不再补发 GET。
 func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 	case "_sys": // 客户端自身的连接提示（重连等）
@@ -499,7 +512,6 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 	}
 
 	m.logf("• %s %s", ev.CreatedAt.Format("15:04"), ev.Message)
-	var refresh tea.Cmd
 	switch ev.Type {
 	case "pet.fell_asleep":
 		m.pet.Sleeping = true
@@ -509,12 +521,10 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 		m.action, m.frame = animIdle, 0
 	case "pet.stage_up":
 		m.action, m.frame = animCelebrate, 0
-		refresh = getPetCmd(m.client, m.pet.ID)
 	case "pet.dead":
 		m.pet.Alive = false
-		refresh = getPetCmd(m.client, m.pet.ID)
 	}
-	return m, tea.Batch(waitEventCmd(m.sseCh), refresh)
+	return m, waitEventCmd(m.sseCh)
 }
 
 // onError 处理异步错误：连接失败进离线页，业务错误进日志。
@@ -528,25 +538,27 @@ func (m model) onError(e errMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startSSE 启动 SSE 订阅（断线自动重连），返回等待事件的命令。
+// startSSE 启动 SSE 订阅（断线自动重连），返回等待事件与状态快照的命令。
 func (m *model) startSSE() tea.Cmd {
 	if m.sseCh != nil {
-		return waitEventCmd(m.sseCh)
+		return tea.Batch(waitEventCmd(m.sseCh), waitStateCmd(m.stateCh))
 	}
 	m.sseCh = make(chan Event, 32)
+	m.stateCh = make(chan PetState, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.sseCancel = cancel
-	ch := m.sseCh
+	evCh, stCh := m.sseCh, m.stateCh
 	id := m.pet.ID
 	go func() {
-		defer close(ch)
+		defer close(evCh)
+		defer close(stCh)
 		for {
-			err := m.client.WatchEvents(ctx, id, ch)
+			err := m.client.WatchEvents(ctx, id, evCh, stCh)
 			if ctx.Err() != nil {
 				return
 			}
 			select {
-			case ch <- Event{Type: "_sys", Message: fmt.Sprintf("事件流断开（%v），%v 后重连…", err, reconnectDur)}:
+			case evCh <- Event{Type: "_sys", Message: fmt.Sprintf("事件流断开（%v），%v 后重连…", err, reconnectDur)}:
 			case <-ctx.Done():
 				return
 			}
@@ -557,7 +569,7 @@ func (m *model) startSSE() tea.Cmd {
 			}
 		}
 	}()
-	return waitEventCmd(ch)
+	return tea.Batch(waitEventCmd(evCh), waitStateCmd(stCh))
 }
 
 // shutdown 释放 SSE 与聊天流资源（退出时调用）。

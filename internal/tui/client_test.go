@@ -149,18 +149,29 @@ func TestClientWatchEvents(t *testing.T) {
 	}
 
 	watchCtx, cancel := context.WithCancel(ctx)
-	ch := make(chan Event, 8)
+	evCh := make(chan Event, 8)
+	stCh := make(chan PetState, 8)
 	done := make(chan error, 1)
-	go func() { done <- c.WatchEvents(watchCtx, p.ID, ch) }()
+	go func() { done <- c.WatchEvents(watchCtx, p.ID, evCh, stCh) }()
 
 	// 回放：pet.born 应先到
 	select {
-	case ev := <-ch:
+	case ev := <-evCh:
 		if ev.Type != "pet.born" {
 			t.Fatalf("first event = %q", ev.Type)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no replay event")
+	}
+
+	// 订阅后补发状态快照：ID 匹配且带数值
+	select {
+	case st := <-stCh:
+		if st.ID != p.ID || st.Stats.Hunger <= 0 {
+			t.Fatalf("state = %+v", st)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no state snapshot")
 	}
 
 	// 实时事件：推假时钟 12h，GetPet 触发结算 → pet.hungry
@@ -169,7 +180,7 @@ func TestClientWatchEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case ev := <-ch:
+	case ev := <-evCh:
 		if ev.Type != "pet.hungry" || ev.Message == "" {
 			t.Fatalf("event = %+v", ev)
 		}

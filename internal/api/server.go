@@ -37,6 +37,8 @@ type Server struct {
 func NewServer(st *store.Store, engine *tick.Engine, hub *Hub, fs *petfs.FS, ag *agent.PetAgent) *Server {
 	s := &Server{store: st, engine: engine, hub: hub, fs: fs, agent: ag,
 		mux: http.NewServeMux(), a2aHandlers: make(map[string]*a2aEntry)}
+	// 状态快照推送：结算/动作落库后经 hub 广播 SSE state 帧。
+	engine.SetStateSink(stateSink{hub})
 	s.mux.HandleFunc("POST /v1/pets", s.handleCreatePet)
 	s.mux.HandleFunc("GET /v1/pets", s.handleListPets)
 	s.mux.HandleFunc("GET /v1/pets/{id}", s.handleGetPet)
@@ -52,8 +54,8 @@ func NewServer(st *store.Store, engine *tick.Engine, hub *Hub, fs *petfs.FS, ag 
 	return s
 }
 
-// Handler 返回根 HTTP handler。
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler 返回根 HTTP handler（含请求日志中间件）。
+func (s *Server) Handler() http.Handler { return logRequests(s.mux) }
 
 // statsView 是对外展示的数值视图（内部 float 取整）。
 type statsView struct {
@@ -80,18 +82,44 @@ type petView struct {
 	Personality string `json:"personality,omitempty"`
 }
 
+// stateView 是 SSE state 帧的载荷：随时间变化的字段快照（每 tick/动作后推送）。
+// 与 petView 分离：名字、物种等不变字段不重复推，客户端合并到本地状态。
+type stateView struct {
+	ID       string    `json:"id"`
+	Stage    pet.Stage `json:"stage"`
+	Sleeping bool      `json:"sleeping"`
+	Alive    bool      `json:"alive"`
+	Stats    statsView `json:"stats"`
+}
+
+// statsViewOf 计算对外展示的数值视图（内部 float 取整）。
+func statsViewOf(p *pet.Pet) statsView {
+	return statsView{
+		Hunger: int(math.Round(p.Stats.Hunger)),
+		Happy:  int(math.Round(p.Stats.Happy)),
+		Clean:  int(math.Round(p.Stats.Clean)),
+		Energy: int(math.Round(p.Stats.Energy)),
+		Health: int(math.Round(p.Stats.Health)),
+		EXP:    p.Stats.EXP,
+	}
+}
+
+// stateOf 从领域对象构造状态快照。
+func stateOf(p *pet.Pet) stateView {
+	return stateView{ID: p.ID, Stage: p.Stage, Sleeping: p.Sleeping, Alive: p.Alive, Stats: statsViewOf(p)}
+}
+
+// stateSink 把 engine 的状态快照适配到 hub（实现 tick.StateSink）。
+type stateSink struct{ hub *Hub }
+
+// PublishState 实现 tick.StateSink。
+func (s stateSink) PublishState(p *pet.Pet) { s.hub.PublishState(stateOf(p)) }
+
 func view(p *pet.Pet) petView {
 	return petView{
 		ID: p.ID, Name: p.Name, Species: p.Species, Stage: p.Stage,
 		Sleeping: p.Sleeping, Alive: p.Alive,
-		Stats: statsView{
-			Hunger: int(math.Round(p.Stats.Hunger)),
-			Happy:  int(math.Round(p.Stats.Happy)),
-			Clean:  int(math.Round(p.Stats.Clean)),
-			Energy: int(math.Round(p.Stats.Energy)),
-			Health: int(math.Round(p.Stats.Health)),
-			EXP:    p.Stats.EXP,
-		},
+		Stats:  statsViewOf(p),
 		BornAt: p.BornAt, LastTickAt: p.LastTickAt,
 	}
 }
@@ -201,7 +229,8 @@ func (s *Server) handleCare(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view(p))
 }
 
-// handleEvents 是 SSE 事件流：先回放 pet_events 中最近 N 条，再持续推送实时事件。
+// handleEvents 是 SSE 流：先回放 pet_events 中最近 N 条事件，订阅后补发当前状态快照，
+// 随后持续推送实时事件与状态快照（state 帧）。客户端靠 state 帧刷新数值，无需轮询。
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.store.GetPet(r.Context(), id); err != nil {
@@ -219,12 +248,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	send := func(e pet.Event) error {
-		data, err := json.Marshal(e)
+	send := func(name string, idLine int64, payload any) error {
+		data, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.ID, e.Type, data); err != nil {
+		if idLine > 0 {
+			fmt.Fprintf(w, "id: %d\n", idLine)
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data); err != nil {
 			return err
 		}
 		flusher.Flush()
@@ -238,23 +270,35 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, e := range recent {
-		if err := send(e); err != nil {
+		if err := send(e.Type, e.ID, e); err != nil {
 			return
 		}
 	}
 
-	// 订阅实时事件直至客户端断开。
+	// 订阅实时推送；先订阅再结算快照，避免漏掉两动作之间的帧。
 	ch, cancel := s.hub.Subscribe(id)
 	defer cancel()
+
+	// 补发当前状态快照：客户端（含重连）立即拿到最新数值，不用等下一个 tick。
+	if p, err := s.engine.Settle(r.Context(), id); err == nil {
+		if err := send("state", 0, stateOf(p)); err != nil {
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case e, ok := <-ch:
+		case f, ok := <-ch:
 			if !ok {
 				return
 			}
-			if err := send(e); err != nil {
+			var idLine int64
+			if e, isEvent := f.data.(pet.Event); isEvent {
+				idLine = e.ID
+			}
+			if err := send(f.name, idLine, f.data); err != nil {
 				return
 			}
 		}

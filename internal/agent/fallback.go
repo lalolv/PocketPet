@@ -67,13 +67,13 @@ func moodPhrase(p *pet.Pet) string {
 		return "正困得睁不开眼"
 	case p.Stats.Health < pet.SickBelow:
 		return "身子不太舒服"
-	case p.Stats.Hunger < pet.AlertLow:
+	case p.Stats.Hunger < pet.AlertWarn:
 		return "肚子饿得咕咕叫"
-	case p.Stats.Energy < pet.AlertLow:
+	case p.Stats.Energy < pet.AlertWarn:
 		return "累得抬不起头"
-	case p.Stats.Clean < pet.AlertLow:
+	case p.Stats.Clean < pet.AlertWarn:
 		return "身上脏兮兮的"
-	case p.Stats.Happy < pet.AlertLow:
+	case p.Stats.Happy < pet.AlertWarn:
 		return "心里有点闷闷的"
 	default:
 		return "精神好得很"

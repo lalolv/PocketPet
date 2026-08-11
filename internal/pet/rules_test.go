@@ -17,12 +17,12 @@ func TestCareActions(t *testing.T) {
 		{
 			name:   "feed",
 			action: ActionFeed,
-			want:   Stats{Hunger: 90, Happy: 80, Clean: 75, Energy: 100, Health: 100, EXP: 2},
+			want:   Stats{Hunger: 100, Happy: 80, Clean: 75, Energy: 100, Health: 100, EXP: 2},
 		},
 		{
 			name:   "play",
 			action: ActionPlay,
-			want:   Stats{Hunger: 65, Happy: 95, Clean: 80, Energy: 90, Health: 100, EXP: 3},
+			want:   Stats{Hunger: 65, Happy: 100, Clean: 80, Energy: 90, Health: 100, EXP: 3},
 		},
 		{
 			name:   "clean",
@@ -54,7 +54,7 @@ func TestCareActions(t *testing.T) {
 			name:   "play drops hunger below threshold triggers event",
 			action: ActionPlay,
 			mutate: func(p *Pet) { p.Stats.Hunger = 22 },
-			want:   Stats{Hunger: 17, Happy: 95, Clean: 80, Energy: 90, Health: 100, EXP: 3},
+			want:   Stats{Hunger: 17, Happy: 100, Clean: 80, Energy: 90, Health: 100, EXP: 3},
 			check: func(t *testing.T, p *Pet) {
 				if !p.Alerts.Hungry {
 					t.Fatal("hungry alert should be set")
@@ -134,7 +134,7 @@ func TestSleepWakeEvents(t *testing.T) {
 // TestAdjust 验证插件用数值调整（M5）：钳制、晋升事件、死亡不生效。
 func TestAdjust(t *testing.T) {
 	p := newTestPet()
-	// 加 EXP 跨过 baby 阈值（50）：晋升事件
+	// 加 EXP 跨过 baby 阈值（30）：晋升事件
 	evs := p.Adjust(Stats{EXP: 50, Happy: 30}, t0)
 	assertEventTypes(t, evs, EventStageUp)
 	if p.Stage != StageBaby || p.Stats.EXP != 50 || p.Stats.Happy != 100 { // Happy 80+30 钳到 100
@@ -156,7 +156,7 @@ func TestAdjust(t *testing.T) {
 // TestSadAlert 验证心情进入低位触发 pet.sad 边沿告警，恢复后清除标志。
 func TestSadAlert(t *testing.T) {
 	p := newTestPet()
-	evs := p.Adjust(Stats{Happy: -61}, t0) // 80-61=19 < AlertLow
+	evs := p.Adjust(Stats{Happy: -61}, t0) // 80-61=19 < AlertWarn
 	assertEventTypes(t, evs, EventSad)
 	if !p.Alerts.Sad {
 		t.Fatal("sad alert should be set")

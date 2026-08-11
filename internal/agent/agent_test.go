@@ -121,8 +121,8 @@ func TestFallbackMood(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t, "团团", "quiet")
 
-	// 推进 12h：饱食度 70→10，跌破阈值 → 心情短语变成"肚子饿"。
-	env.clock.Advance(12 * time.Hour)
+	// 推进 14h：饱食度 70→28，跌破预警线（30）→ 心情短语变成"肚子饿"。
+	env.clock.Advance(14 * time.Hour)
 	reply, err := env.agent.Chat(context.Background(), p.ID, "吃饭了吗")
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,8 @@ func TestChatDeadPet(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t, "团团", "lively")
 
-	// 离线补算上限 24h/次：第一次推进健康掉到 30，第二次归零死亡。
+	// 离线补算上限 24h/次：第一次推进健康被恢复抵消（仍为 100），
+	// 第二次持续饥饿 24h 扣 120 归零死亡。
 	env.clock.Advance(24 * time.Hour)
 	if _, err := env.engine.Settle(context.Background(), p.ID); err != nil {
 		t.Fatal(err)
@@ -244,8 +245,8 @@ func TestStageSyncWritesPETMD(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t, "团团", "lively")
 
-	// feed 25 次 = 50 EXP，恰好 egg→baby；事件经 MultiSink 到 StageSync。
-	for i := 0; i < 25; i++ {
+	// feed 15 次 = 30 EXP，恰好 egg→baby；事件经 MultiSink 到 StageSync。
+	for i := 0; i < 15; i++ {
 		if _, err := env.engine.Care(context.Background(), p.ID, pet.ActionFeed); err != nil {
 			t.Fatal(err)
 		}

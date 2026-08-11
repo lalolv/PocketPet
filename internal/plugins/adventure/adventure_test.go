@@ -124,7 +124,7 @@ func TestStartAndSettle(t *testing.T) {
 	env.clock.Advance(time.Minute)
 	env.engine.TickAll(context.Background())
 
-	// 结算：EXP +10、Happy +5（80+5=85，注意 tick 衰减 3 分钟 ≈ 0.15）
+	// 结算：EXP +10、Happy +5（80+5=85，注意 tick 衰减 2 分钟 ≈ 0.1）
 	got, _ = env.st.GetPet(context.Background(), p.ID)
 	if got.Stats.EXP != 10 {
 		t.Fatalf("exp = %v, want 10", got.Stats.EXP)

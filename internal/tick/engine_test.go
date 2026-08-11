@@ -83,7 +83,7 @@ func TestTickAllAppliesDecay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Stats.Hunger != 65 || got.Stats.Energy != 98 {
+	if got.Stats.Hunger != 67 || got.Stats.Energy != 98 {
 		t.Fatalf("stats after 1h = %+v", got.Stats)
 	}
 	if !got.LastTickAt.Equal(t0.Add(time.Hour)) {
@@ -99,14 +99,14 @@ func TestCareThroughEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock.Advance(time.Hour) // 先流逝 1h：饱食度 70→65
+	clock.Advance(time.Hour) // 先流逝 1h：饱食度 70→67
 	got, err := eng.Care(ctx, p.ID, pet.ActionFeed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 补算后再 feed：65+20
-	if got.Stats.Hunger != 85 || got.Stats.EXP != 2 {
-		t.Fatalf("stats = %+v, want hunger 85 exp 2", got.Stats)
+	// 补算后再 feed：67+30
+	if got.Stats.Hunger != 97 || got.Stats.EXP != 2 {
+		t.Fatalf("stats = %+v, want hunger 97 exp 2", got.Stats)
 	}
 }
 

@@ -75,7 +75,7 @@ func TestClientREST(t *testing.T) {
 
 	// care 成功
 	fed, err := c.Care(ctx, p.ID, "feed")
-	if err != nil || fed.Stats.Hunger != 90 {
+	if err != nil || fed.Stats.Hunger != 100 {
 		t.Fatalf("feed = %+v, %v", fed, err)
 	}
 
@@ -174,8 +174,8 @@ func TestClientWatchEvents(t *testing.T) {
 		t.Fatal("no state snapshot")
 	}
 
-	// 实时事件：推假时钟 12h，GetPet 触发结算 → pet.hungry
-	ts.clock.Advance(12 * time.Hour)
+	// 实时事件：推假时钟 14h（饱食度 70→28 跌破预警线），GetPet 触发结算 → pet.hungry
+	ts.clock.Advance(14 * time.Hour)
 	if _, err := c.GetPet(ctx, p.ID); err != nil {
 		t.Fatal(err)
 	}

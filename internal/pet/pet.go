@@ -17,15 +17,28 @@ const (
 )
 
 // stageThresholds 定义晋升到某阶段所需的累计 EXP 阈值（须按从小到大排列）。
-// 取值说明：feed +2 / play +3 / clean +1 EXP，正常互动约 20 次破壳（egg→baby），
+// 取值说明：feed +2 / play +3 / clean +1 EXP，正常互动约 3 天破壳（egg→baby），
 // 之后逐步放慢，给长期养成留出空间。
 var stageThresholds = []struct {
 	Stage Stage
 	EXP   int
 }{
-	{StageBaby, 50},   // egg → baby：累计 50 EXP
+	{StageBaby, 30},   // egg → baby：累计 30 EXP
 	{StageChild, 200}, // baby → child：累计 200 EXP
 	{StageAdult, 500}, // child → adult：累计 500 EXP
+}
+
+// stageRank 返回成长阶段的序（egg=0，逐级 +1），用于"只晋升不回退"的比较。
+func stageRank(s Stage) int {
+	switch s {
+	case StageBaby:
+		return 1
+	case StageChild:
+		return 2
+	case StageAdult:
+		return 3
+	}
+	return 0
 }
 
 // Stats 是宠物的数值属性。Hunger/Happy/Clean/Energy/Health 取值 0-100（钳制），

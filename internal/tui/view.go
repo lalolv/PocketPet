@@ -190,6 +190,13 @@ type face struct {
 	eyes, mouth string
 }
 
+// 告警阈值，与 internal/pet 的 AlertWarn / SickBelow 保持一致
+//（TUI 使用自己的 JSON 类型，不 import 领域层）。
+const (
+	alertWarn = 30
+	sickBelow = 50
+)
+
 // faceFor 按状态给出表情：开心 ^^、一般 oo、难过 ;;、生病 xx、睡觉 --、死亡 XX。
 func faceFor(p Pet) face {
 	switch {
@@ -197,11 +204,11 @@ func faceFor(p Pet) face {
 		return face{"X X", "x"}
 	case p.Sleeping:
 		return face{"- -", "-"}
-	case p.Stats.Health < 50:
+	case p.Stats.Health < sickBelow:
 		return face{"x x", "~"}
 	case p.Stats.Happy >= 70:
 		return face{"^ ^", "w"}
-	case p.Stats.Happy < 20:
+	case p.Stats.Happy < alertWarn:
 		return face{"; ;", "n"}
 	default:
 		return face{"o o", "o"}
@@ -211,13 +218,13 @@ func faceFor(p Pet) face {
 // decorations 是低属性的提示性装饰：饿了流口水、脏了长斑点、困了打瞌睡。
 func decorations(p Pet) string {
 	var parts []string
-	if p.Stats.Hunger < 20 {
+	if p.Stats.Hunger < alertWarn {
 		parts = append(parts, "饿得流口水 ~")
 	}
-	if p.Stats.Clean < 20 {
+	if p.Stats.Clean < alertWarn {
 		parts = append(parts, "脏兮兮 ,,")
 	}
-	if p.Stats.Energy < 20 && !p.Sleeping {
+	if p.Stats.Energy < alertWarn && !p.Sleeping {
 		parts = append(parts, "困得睁不开眼")
 	}
 	return strings.Join(parts, "  ")
@@ -257,13 +264,13 @@ func moodWord(p Pet) string {
 		return "已离世"
 	case p.Sleeping:
 		return "呼呼大睡"
-	case p.Stats.Health < 50:
+	case p.Stats.Health < sickBelow:
 		return "不太舒服"
-	case p.Stats.Hunger < 20:
+	case p.Stats.Hunger < alertWarn:
 		return "肚子饿扁了"
 	case p.Stats.Happy >= 70:
 		return "开心"
-	case p.Stats.Happy < 20:
+	case p.Stats.Happy < alertWarn:
 		return "闷闷的"
 	default:
 		return "平静"

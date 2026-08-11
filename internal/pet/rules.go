@@ -8,37 +8,42 @@ import (
 // 数值规则（按小时计，设计文档 3.1/3.2 节的 M1 数值表）。
 // 衰减与恢复均按实际流逝时间线性折算，tick 间隔变化不影响长期速率。
 const (
-	hungerDecayPerHour = 5.0 // 满饱食约 20 小时饿到 0
-	happyDecayPerHour  = 3.0 // 满心情约 33 小时降到 0
-	cleanDecayPerHour  = 2.0 // 满清洁约 50 小时降到 0
+	hungerDecayPerHour = 3.0 // 满饱食约 33 小时饿到 0
+	happyDecayPerHour  = 2.0 // 满心情约 50 小时降到 0
+	cleanDecayPerHour  = 1.5 // 满清洁约 67 小时降到 0
 
 	energyAwakeDrainPerHour = 2.0  // 清醒时精力缓慢消耗，满精力约 50 小时耗尽
 	energySleepGainPerHour  = 25.0 // 睡眠中恢复，约 4 小时从 0 睡满
 
-	healthDrainPerHour = 5.0 // 任一属性低于 AlertLow 期间，健康每小时扣减量
+	sleepDecayFactor = 0.5 // 睡眠中 Hunger/Happy/Clean 衰减减半
+
+	healthDrainPerHour = 5.0 // 任一属性低于 AlertCritical 期间，健康每小时扣减量
+	healthRegenPerHour = 2.0 // 四项属性均不低于 AlertWarn 时，健康每小时恢复量
 )
 
 // 告警/状态阈值。
 const (
-	// AlertLow：Hunger/Happy/Clean/Energy 低于该值时进入"饥饿/脏/困/低落"状态，
-	// 触发对应事件（边沿触发），且期间 Health 持续流失。
-	AlertLow = 20.0
+	// AlertWarn：Hunger/Happy/Clean/Energy 低于该值时进入"饥饿/脏/困/低落"状态，
+	// 触发对应事件（边沿触发）。仅预警，不扣血，给主人留出反应窗口。
+	AlertWarn = 30.0
+	// AlertCritical：任一属性低于该值期间，Health 持续流失。
+	AlertCritical = 10.0
 	// SickBelow：Health 低于该值时触发 pet.sick。
 	SickBelow = 50.0
 )
 
 // 照顾动作的数值效果（M1 数值表）。
 const (
-	feedHungerGain = 20.0
+	feedHungerGain = 30.0
 	feedCleanCost  = 5.0
 	feedEXP        = 2
 
-	playHappyGain  = 15.0
+	playHappyGain  = 20.0
 	playEnergyCost = 10.0 // 精力低于该值时拒绝 play
 	playHungerCost = 5.0
 	playEXP        = 3
 
-	cleanCleanGain = 25.0
+	cleanCleanGain = 30.0
 	cleanEXP       = 1
 )
 
@@ -84,36 +89,51 @@ func (p *Pet) Tick(now time.Time, maxElapsed time.Duration) []Event {
 	p.LastTickAt = now
 
 	h := elapsed.Hours()
-	p.Stats.Hunger -= hungerDecayPerHour * h
-	p.Stats.Happy -= happyDecayPerHour * h
-	p.Stats.Clean -= cleanDecayPerHour * h
+	// 睡眠中 Hunger/Happy/Clean 衰减减半，Energy 转为恢复。
+	decay := 1.0
+	if p.Sleeping {
+		decay = sleepDecayFactor
+	}
+	p.Stats.Hunger -= hungerDecayPerHour * decay * h
+	p.Stats.Happy -= happyDecayPerHour * decay * h
+	p.Stats.Clean -= cleanDecayPerHour * decay * h
 	if p.Sleeping {
 		p.Stats.Energy += energySleepGainPerHour * h
 	} else {
 		p.Stats.Energy -= energyAwakeDrainPerHour * h
 	}
 
-	// 健康流失：只在"任一属性低于阈值"的时间段内扣减。按线性速率估算
-	// 各属性处于阈值以下的时长并取最长者——这样 24h 离线补算时，
-	// 一只原本健康的宠物只会从跌破阈值后开始扣血，不会直接被扣死。
-	if d := p.lowDuration(h); d > 0 {
+	// 健康结算分两段估算（按线性速率回推各属性处于阈值以下的时长）：
+	// 1) 流失：只在"任一属性低于 AlertCritical"的时间段内扣减——这样 24h
+	//    离线补算时，一只原本健康的宠物只会从跌破临界值后开始扣血，
+	//    不会直接被扣死；
+	// 2) 恢复："四项属性均不低于 AlertWarn"的时间段内缓慢回血，
+	//    让生病在恢复正常照顾后可逆。
+	if d := p.lowDuration(h, AlertCritical); d > 0 {
 		p.Stats.Health -= healthDrainPerHour * d
+	}
+	if d := p.lowDuration(h, AlertWarn); d < h {
+		p.Stats.Health += healthRegenPerHour * (h - d)
 	}
 
 	p.clamp()
 	return p.refresh(now)
 }
 
-// lowDuration 估算在本次结算的 h 小时内，任一属性处于 AlertLow 以下的
+// lowDuration 估算在本次结算的 h 小时内，任一属性处于 threshold 以下的
 // 最长时长（小时）。调用时各属性已应用本段衰减但尚未钳制，
 // 函数按速率回推结算前的值进行估算。
-func (p *Pet) lowDuration(h float64) float64 {
+func (p *Pet) lowDuration(h, threshold float64) float64 {
 	longest := 0.0
+	decay := 1.0
+	if p.Sleeping {
+		decay = sleepDecayFactor
+	}
 	// 持续下降的属性：after 为结算后值，rate 为每小时下降量。
 	down := []struct{ after, rate float64 }{
-		{p.Stats.Hunger, hungerDecayPerHour},
-		{p.Stats.Happy, happyDecayPerHour},
-		{p.Stats.Clean, cleanDecayPerHour},
+		{p.Stats.Hunger, hungerDecayPerHour * decay},
+		{p.Stats.Happy, happyDecayPerHour * decay},
+		{p.Stats.Clean, cleanDecayPerHour * decay},
 	}
 	if !p.Sleeping {
 		down = append(down, struct{ after, rate float64 }{p.Stats.Energy, energyAwakeDrainPerHour})
@@ -121,20 +141,20 @@ func (p *Pet) lowDuration(h float64) float64 {
 	for _, r := range down {
 		before := r.after + r.rate*h
 		switch {
-		case before < AlertLow:
-			// 结算前已低于阈值：整段都在扣血，不可能更长，直接返回。
+		case before < threshold:
+			// 结算前已低于阈值：整段都在阈值以下，不可能更长，直接返回。
 			return h
-		case r.after < AlertLow:
+		case r.after < threshold:
 			// 本段内跌破阈值：低于阈值的时长 = h - 跌破所需时间。
-			if d := h - (before-AlertLow)/r.rate; d > longest {
+			if d := h - (before-threshold)/r.rate; d > longest {
 				longest = d
 			}
 		}
 	}
-	// 睡眠中精力在恢复：若结算前精力低于阈值，恢复到阈值之前仍在扣血。
+	// 睡眠中精力在恢复：若结算前精力低于阈值，恢复到阈值之前仍在阈值以下。
 	if p.Sleeping {
-		if beforeE := p.Stats.Energy - energySleepGainPerHour*h; beforeE < AlertLow {
-			t := (AlertLow - beforeE) / energySleepGainPerHour
+		if beforeE := p.Stats.Energy - energySleepGainPerHour*h; beforeE < threshold {
+			t := (threshold - beforeE) / energySleepGainPerHour
 			if t > h {
 				t = h
 			}
@@ -216,23 +236,26 @@ func (p *Pet) refresh(now time.Time) []Event {
 	var evs []Event
 
 	// 成长阶段：按累计 EXP 计算目标阶段，跨越即晋升（可多级连跳，只报最终阶段）。
+	// 只晋升不回退：EXP 只增不减，阶段不应倒退——否则阈值表版本不一致
+	// （如多实例并存跑新旧二进制）时会反复降级/晋升刷事件。
 	target := StageEgg
 	for _, th := range stageThresholds {
 		if p.Stats.EXP >= th.EXP {
 			target = th.Stage
 		}
 	}
-	if target != p.Stage {
+	if stageRank(target) > stageRank(p.Stage) {
 		p.Stage = target
 		evs = append(evs, p.newEvent(EventStageUp, p.Name+" 成长到了 "+string(target)+" 阶段", now))
 	}
 
 	// 边沿告警：状态从"正常"变为"异常"时才触发，恢复正常时清除标志。
-	evs = append(evs, p.checkAlert(&p.Alerts.Hungry, p.Stats.Hunger < AlertLow, EventHungry, p.Name+" 饿了，肚子咕咕叫", now)...)
-	evs = append(evs, p.checkAlert(&p.Alerts.Dirty, p.Stats.Clean < AlertLow, EventDirty, p.Name+" 脏兮兮的，该洗澡了", now)...)
-	evs = append(evs, p.checkAlert(&p.Alerts.Sleepy, p.Stats.Energy < AlertLow, EventSleepy, p.Name+" 困了，睁不开眼", now)...)
+	// 预警线为 AlertWarn；健康扣减在 Tick 中按 AlertCritical 结算。
+	evs = append(evs, p.checkAlert(&p.Alerts.Hungry, p.Stats.Hunger < AlertWarn, EventHungry, p.Name+" 饿了，肚子咕咕叫", now)...)
+	evs = append(evs, p.checkAlert(&p.Alerts.Dirty, p.Stats.Clean < AlertWarn, EventDirty, p.Name+" 脏兮兮的，该洗澡了", now)...)
+	evs = append(evs, p.checkAlert(&p.Alerts.Sleepy, p.Stats.Energy < AlertWarn, EventSleepy, p.Name+" 困了，睁不开眼", now)...)
 	evs = append(evs, p.checkAlert(&p.Alerts.Sick, p.Stats.Health < SickBelow, EventSick, p.Name+" 看起来生病了", now)...)
-	evs = append(evs, p.checkAlert(&p.Alerts.Sad, p.Stats.Happy < AlertLow, EventSad, p.Name+" 心情低落，想找人陪陪", now)...)
+	evs = append(evs, p.checkAlert(&p.Alerts.Sad, p.Stats.Happy < AlertWarn, EventSad, p.Name+" 心情低落，想找人陪陪", now)...)
 
 	// 死亡：健康归零。
 	if p.Alive && p.Stats.Health <= 0 {

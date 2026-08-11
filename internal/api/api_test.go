@@ -103,23 +103,23 @@ func TestCreateCareGetFlow(t *testing.T) {
 	env := setup(t)
 	id := createPet(t, env)
 
-	// feed：Hunger 70→90，EXP+2
+	// feed：Hunger 70→100，EXP+2
 	status, body := doJSON(t, "POST", env.srv.URL+"/v1/pets/"+id+"/care", `{"action":"feed"}`)
 	if status != http.StatusOK {
 		t.Fatalf("care status = %d, body = %v", status, body)
 	}
 	s := statsOf(t, body)
-	if s["hunger"] != 90.0 || s["exp"] != 2.0 {
+	if s["hunger"] != 100.0 || s["exp"] != 2.0 {
 		t.Fatalf("stats after feed = %v", s)
 	}
 
-	// play：Happy 80→95，Energy 100→90，Hunger 90→85
+	// play：Happy 80→100，Energy 100→90，Hunger 100→95
 	status, body = doJSON(t, "POST", env.srv.URL+"/v1/pets/"+id+"/care", `{"action":"play"}`)
 	if status != http.StatusOK {
 		t.Fatalf("care status = %d, body = %v", status, body)
 	}
 	s = statsOf(t, body)
-	if s["happy"] != 95.0 || s["energy"] != 90.0 || s["hunger"] != 85.0 {
+	if s["happy"] != 100.0 || s["energy"] != 90.0 || s["hunger"] != 95.0 {
 		t.Fatalf("stats after play = %v", s)
 	}
 
@@ -412,9 +412,9 @@ func TestSSEReplayAndLive(t *testing.T) {
 		t.Fatalf("frame after replay = %q %s, want state with stats", typ, data)
 	}
 
-	// 实时推送：推进假时钟 12h（饱食度 70→10 跌破阈值），
+	// 实时推送：推进假时钟 14h（饱食度 70→28 跌破预警线），
 	// GET 触发即时结算 → pet.hungry 经 hub 推送（前后可能夹带 state 帧）
-	env.clock.Advance(12 * time.Hour)
+	env.clock.Advance(14 * time.Hour)
 	if status, _ := doJSON(t, "GET", env.srv.URL+"/v1/pets/"+id, ""); status != http.StatusOK {
 		t.Fatalf("get status = %d", status)
 	}

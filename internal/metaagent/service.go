@@ -83,24 +83,30 @@ func (m *Midwife) Start(ctx context.Context, req Request) (*BirthResult, error) 
 	}
 	m.emitStarted(ctx, d)
 
-	run := func() {
-		runCtx := context.Background()
-		if err := m.RunBirth(runCtx, p.ID); err != nil {
-			slog.Warn("metaagent: birth failed", "pet", p.ID, "err", err)
-		}
-	}
-	if m.Sync {
-		run()
-	} else {
-		go run()
-	}
-
-	return &BirthResult{
+	sync := m.Sync || req.AwaitSoul
+	res := &BirthResult{
 		PetID:         p.ID,
 		Seed:          seed,
 		Species:       req.Species,
 		Mode:          mode,
 		GenesisStatus: pet.GenesisIncubating,
 		EventsURL:     "/v1/pets/" + p.ID + "/events",
-	}, nil
+	}
+
+	run := func() string {
+		via, err := m.RunBirth(context.Background(), p.ID)
+		if err != nil {
+			slog.Warn("metaagent: birth failed", "pet", p.ID, "err", err)
+		}
+		return via
+	}
+	if sync {
+		res.Via = run()
+		if got, err := m.Engine.Settle(ctx, p.ID); err == nil && !got.Incubating() {
+			res.GenesisStatus = pet.GenesisReady
+		}
+	} else {
+		go run()
+	}
+	return res, nil
 }

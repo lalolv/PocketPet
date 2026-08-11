@@ -68,9 +68,11 @@ func TestScriptBirthEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.GenesisStatus != pet.GenesisIncubating {
-		// Sync 跑完后 Start 返回时已是 incubating 快照；宠物本身应已 ready
-		t.Fatalf("birth result status = %q", res.GenesisStatus)
+	if res.GenesisStatus != pet.GenesisReady {
+		t.Fatalf("birth result status = %q, want ready (Sync)", res.GenesisStatus)
+	}
+	if res.Via != ViaScript {
+		t.Fatalf("via = %q, want script", res.Via)
 	}
 
 	p, err := st.GetPet(ctx, res.PetID)
@@ -193,6 +195,56 @@ func TestFallbackCompletes(t *testing.T) {
 	}
 	if got.GenesisStatus != pet.GenesisReady || got.Name == "" {
 		t.Fatalf("pet = %+v", got)
+	}
+}
+
+func TestAwaitSoulSync(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
+	engine := tick.NewEngine(st, nil, time.Minute, 24*time.Hour, pet.RealClock{})
+	m := &Midwife{Engine: engine, FS: fs, Emit: engine.Emit, ForceScript: true}
+
+	res, err := m.Start(ctx, Request{
+		Name: "同步", Species: "cat", Mode: ModeRandom, Seed: "await-1", AwaitSoul: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.GenesisStatus != pet.GenesisReady || res.Via != ViaScript {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestScriptPaceSleeps(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
+	engine := tick.NewEngine(st, nil, time.Minute, 24*time.Hour, pet.RealClock{})
+	m := &Midwife{
+		Engine: engine, FS: fs, Emit: engine.Emit,
+		ForceScript: true, Sync: true, ScriptPace: 5 * time.Millisecond,
+	}
+	start := time.Now()
+	res, err := m.Start(ctx, Request{Species: "cat", Seed: "pace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	// 7 个阶段间隔 + finalize 前旁白：至少约 7*5ms
+	if elapsed < 30*time.Millisecond {
+		t.Fatalf("elapsed %v too fast for ScriptPace; via=%s", elapsed, res.Via)
+	}
+	if res.Via != ViaScript {
+		t.Fatalf("via = %q", res.Via)
 	}
 }
 

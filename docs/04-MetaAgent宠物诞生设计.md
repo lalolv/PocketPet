@@ -264,7 +264,7 @@ POST /v1/pets/birth
 | `genesis.soul` | `preview`（全文可再 `GET .../soul`） |
 | `genesis.stats` | 各属性；可同时推 `state` 帧 |
 | `genesis.identity` | `name`, `master` |
-| `genesis.ready` | `pet_id` |
+| `genesis.ready` | `pet_id`, `name`, `fallback`, `via` |
 | `genesis.failed` | `reason`, `fallback` |
 
 可选：`POST /v1/pets/birth?stream=true` 在同一响应里直接吐 genesis 帧（类似 chat stream）；默认仍推荐 **201 返回 pet_id + 客户端订 events**，便于断线重放（事件入 `pet_events`）。
@@ -296,6 +296,7 @@ POST /v1/pets/birth
 | `prompt` | `describe` 必填；`random` 下为可选软愿望 |
 | `seed` | 可选；空则服务端生成；有则基因可复现 |
 | `master` | 可选，默认「主人」 |
+| `await_soul` | 可选；`true` 时同步跑完再返回（`ready` + `via`） |
 
 响应 `201`：
 
@@ -310,21 +311,30 @@ POST /v1/pets/birth
 }
 ```
 
+`await_soul: true` 时 `genesis_status` 为 `ready`，并带 `via`（`llm` / `script` / `fallback`）。
+
 ### 9.2 查询
 
 `GET /v1/pets/{id}` 增加 `genesis_status`：`incubating` | `ready` | `failed`（failed 且已 fallback 成功则可为 `ready` + 标记）。
 
 ### 9.3 与旧 `POST /v1/pets` 的关系
 
-保留即时创建路径，用于无 LLM / 测试 / 兼容；文档与 README 逐步引导新产品走 `/birth`。
+配置 `genesis.legacy_create`（默认 `instant`）：
+
+| 值 | 行为 |
+|---|---|
+| `instant` | 即时性格模板创建，无 `genesis.*` SSE（测试 / 兼容） |
+| `birth` | 转发 MetaAgent（`await_soul`），响应仍为原来的 `petView` |
+
+新产品与 TUI 走 `/v1/pets/birth`。
 
 ## 10. 失败与降级
 
 | 情况 | 行为 |
 |---|---|
 | 单工具参数非法 | 返回 `ok: false` + 原因，MetaAgent 可重试 |
-| MetaAgent 总超时（建议 90s） | fallback：用 seed 确定性补齐未完成阶段并 finalize；`genesis.failed` 可先发或仅日志，最终仍 `genesis.ready` 且 `fallback: true` |
-| 未配置 LLM | 不跑 MetaAgent；sampler + 模板/插值叙事；可发压缩版 genesis 事件（快速播完） |
+| MetaAgent 总超时（默认 90s，`genesis.timeout_seconds` / `POCKETPET_GENESIS_TIMEOUT`） | fallback：用 seed 确定性补齐并 finalize；可先发 `genesis.failed`，最终仍 `genesis.ready` 且 `via: fallback` |
+| 未配置 LLM | 脚本按阶段发完整 `genesis.*`（`script_pace_ms` 控制节拍） |
 | finalize 前客户端断开 | 后台继续；重连 SSE 回放已落库事件 |
 | finalize 校验失败且重试耗尽 | 同超时 fallback，避免卡在 incubating |
 
@@ -345,11 +355,11 @@ internal/metaagent/
 
 接线：
 
-- `cmd/pocketpetd`：注册 birth 路由；Hub 订阅 genesis 事件；
+- `cmd/pocketpetd`：注册 birth 路由；Hub 订阅 genesis 事件；`cfg.Genesis` → Midwife / Server；
 - `internal/pet.New`：支持可选初始 Stats；
 - `internal/petfs`：支持 quirks / temperament 字段写入约定；
 - `PetAgent`：`incubating` 时拒绝或降级 chat；
-- 后续落地架构 §4.2 **性格数值修饰器**，否则随机 traits 对手感影响有限。
+- G4 已落地性格数值修饰器（见附录 A）。
 
 `seed` 写入 `PET.md` frontmatter（或 SQLite），便于「基因码」分享与调试复现。
 
@@ -360,7 +370,7 @@ internal/metaagent/
 | **G0 文档** | 本设计文档 | ✅ |
 | **G1 草稿与工具骨架** | draft 状态机 + 工具 + 脚本调工具；SSE `genesis.*` | ✅ |
 | **G2 MetaAgent** | 真 LLM runner + 规则 prompt；`POST /v1/pets/birth` | ✅ LLM 工具链诞生；失败/超时 fallback |
-| **G3 降级与兼容** | fallback、无 LLM、旧 `POST /v1/pets` 策略 | 部分已含于 G1/G2；可再细化超时配置与文档 |
+| **G3 降级与兼容** | 超时可配置、`await_soul`、无 LLM 脚本节拍、旧 `/v1/pets` 策略 | ✅ |
 | **G4 玩法闭环** | traits → tick/care 修饰器；TUI 诞生剧场 | ✅ |
 
 实施顺序：**先 G0（本文），再 G1 → G2 → G3 → G4**。
@@ -395,7 +405,7 @@ internal/metaagent/
 
 ---
 
-**下一步**：G3 可补超时可配置与产品说明；玩法侧已可感知不同基因手感。
+**G0–G4 已收口。** 配置见 `configs/pocketpet.example.yaml` 的 `genesis` 段。
 
 ## 附录 A：G4 特质数值修饰（已落地）
 

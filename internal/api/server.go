@@ -31,6 +31,9 @@ type Server struct {
 	midwife *metaagent.Midwife
 	mux     *http.ServeMux
 
+	// LegacyCreate 控制旧 POST /v1/pets：instant（默认）或 birth（转发 MetaAgent）。
+	LegacyCreate string
+
 	a2aMu       sync.Mutex
 	a2aHandlers map[string]*a2aEntry // petID → A2A 协议 handler（按 agent 实例缓存）
 }
@@ -38,6 +41,7 @@ type Server struct {
 // NewServer 装配路由。midwife 可为 nil（禁用 /v1/pets/birth）。
 func NewServer(st *store.Store, engine *tick.Engine, hub *Hub, fs *petfs.FS, ag *agent.PetAgent, midwife *metaagent.Midwife) *Server {
 	s := &Server{store: st, engine: engine, hub: hub, fs: fs, agent: ag, midwife: midwife,
+		LegacyCreate: "instant",
 		mux: http.NewServeMux(), a2aHandlers: make(map[string]*a2aEntry)}
 	// 状态快照推送：结算/动作落库后经 hub 广播 SSE state 帧。
 	engine.SetStateSink(stateSink{hub})
@@ -165,6 +169,12 @@ func (s *Server) handleCreatePet(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		req.Name = defaultPetName(req.Species)
 	}
+
+	if strings.EqualFold(strings.TrimSpace(s.LegacyCreate), "birth") {
+		s.createPetViaBirth(w, r, req)
+		return
+	}
+
 	// 先校验性格模板名，避免宠物出生了文件却建不起来。
 	if _, err := petfs.ResolvePersonality(req.Personality); err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
@@ -190,6 +200,37 @@ func (s *Server) handleCreatePet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, v)
 }
 
+// createPetViaBirth 把旧 POST /v1/pets 转发为同步 MetaAgent 诞生，响应仍为 petView。
+func (s *Server) createPetViaBirth(w http.ResponseWriter, r *http.Request, req createPetRequest) {
+	if s.midwife == nil {
+		writeError(w, http.StatusServiceUnavailable, codeInternal, "birth service unavailable")
+		return
+	}
+	mode := metaagent.ModeRandom
+	personality := strings.TrimSpace(req.Personality)
+	if personality != "" {
+		mode = metaagent.ModeTemplate
+	}
+	res, err := s.midwife.Start(r.Context(), metaagent.Request{
+		Name: req.Name, Species: req.Species, Mode: mode,
+		Personality: personality, AwaitSoul: true,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+		return
+	}
+	p, err := s.engine.Settle(r.Context(), res.PetID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	v := view(p)
+	if per, err := s.fs.SoulTemplate(p.ID); err == nil {
+		v.Personality = per
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
 type birthPetRequest struct {
 	Name        string `json:"name"`
 	Species     string `json:"species"`
@@ -198,9 +239,10 @@ type birthPetRequest struct {
 	Prompt      string `json:"prompt"`
 	Seed        string `json:"seed"`
 	Master      string `json:"master"`
+	AwaitSoul   bool   `json:"await_soul"`
 }
 
-// handleBirthPet 启动 MetaAgent 分阶段诞生（G1：脚本跑通阶段 + SSE genesis.*）。
+// handleBirthPet 启动 MetaAgent 分阶段诞生（SSE genesis.*；await_soul 时可同步等到 ready）。
 func (s *Server) handleBirthPet(w http.ResponseWriter, r *http.Request) {
 	if s.midwife == nil {
 		writeError(w, http.StatusServiceUnavailable, codeInternal, "birth service unavailable")
@@ -214,7 +256,7 @@ func (s *Server) handleBirthPet(w http.ResponseWriter, r *http.Request) {
 	res, err := s.midwife.Start(r.Context(), metaagent.Request{
 		Name: req.Name, Species: req.Species, Mode: req.Mode,
 		Personality: req.Personality, Prompt: req.Prompt,
-		Seed: req.Seed, Master: req.Master,
+		Seed: req.Seed, Master: req.Master, AwaitSoul: req.AwaitSoul,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())

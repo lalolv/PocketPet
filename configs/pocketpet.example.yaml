@@ -34,6 +34,13 @@ llm:
 
 # 宠物级覆盖：AGENT.md 的 model 字段可让单只宠物换用别的模型（其余连接参数继承全局）。
 
+# MetaAgent 诞生（见 docs/04-MetaAgent宠物诞生设计.md）。
+genesis:
+  timeout_seconds: 90       # 单次诞生上限；超时走 seed fallback。也可用 POCKETPET_GENESIS_TIMEOUT。
+  script_pace_ms: 80        # 无 LLM 时脚本各阶段间隔（SSE 观感）；0=尽快。POCKETPET_GENESIS_SCRIPT_PACE。
+  legacy_create: instant    # 旧 POST /v1/pets：instant=即时模板；birth=转发 MetaAgent（同步 await）。
+                            # 也可用 POCKETPET_GENESIS_LEGACY_CREATE。
+
 mcp:
   servers: []        # POCKETPET_MCP_SERVERS(JSON) 非空时整体覆盖本列表
   # - name: weather

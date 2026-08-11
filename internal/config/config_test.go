@@ -40,6 +40,10 @@ func TestDefaultsPureEnv(t *testing.T) {
 	if cfg.LLM != (llm.Config{}) {
 		t.Fatalf("llm = %+v", cfg.LLM)
 	}
+	if cfg.Genesis.Timeout != 90*time.Second || cfg.Genesis.ScriptPace != 80*time.Millisecond ||
+		cfg.Genesis.LegacyCreate != LegacyCreateInstant {
+		t.Fatalf("genesis defaults = %+v", cfg.Genesis)
+	}
 }
 
 func TestFileLoading(t *testing.T) {
@@ -172,5 +176,34 @@ proactive:
 	}
 	if want := (ProactiveConfig{Enabled: true, AutoSleep: false, AutoWake: true, Messages: false}); cfg.Proactive != want {
 		t.Fatalf("proactive = %+v, want %+v", cfg.Proactive, want)
+	}
+}
+
+func TestGenesisConfig(t *testing.T) {
+	path := writeYAML(t, `
+genesis:
+  timeout_seconds: 30
+  script_pace_ms: 0
+  legacy_create: birth
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Genesis.Timeout != 30*time.Second || cfg.Genesis.ScriptPace != 0 ||
+		cfg.Genesis.LegacyCreate != LegacyCreateBirth {
+		t.Fatalf("genesis file = %+v", cfg.Genesis)
+	}
+
+	t.Setenv(EnvGenesisTimeout, "45s")
+	t.Setenv(EnvGenesisScriptPace, "10ms")
+	t.Setenv(EnvGenesisLegacyCreate, "instant")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Genesis.Timeout != 45*time.Second || cfg.Genesis.ScriptPace != 10*time.Millisecond ||
+		cfg.Genesis.LegacyCreate != LegacyCreateInstant {
+		t.Fatalf("genesis env override = %+v", cfg.Genesis)
 	}
 }

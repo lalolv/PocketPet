@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -29,6 +30,9 @@ const (
 	EnvSkillsDir    = "POCKETPET_SKILLS_DIR"    // 全局技能目录（SKILL.md 技能包，对所有宠物可见）
 	EnvMCPServers   = "POCKETPET_MCP_SERVERS"   // 全局可用 MCP servers，JSON 数组
 	EnvLogLevel     = "POCKETPET_LOG_LEVEL"     // 日志级别：debug / info / warn / error
+	EnvGenesisTimeout     = "POCKETPET_GENESIS_TIMEOUT"      // 诞生超时，如 "90s"
+	EnvGenesisScriptPace  = "POCKETPET_GENESIS_SCRIPT_PACE"  // 无 LLM 脚本阶段间隔，如 "80ms"
+	EnvGenesisLegacyCreate = "POCKETPET_GENESIS_LEGACY_CREATE" // instant | birth
 )
 
 // 默认探测的配置文件路径（按顺序）。
@@ -71,9 +75,31 @@ type Config struct {
 	// Proactive 是状态驱动的主动行为配置（yaml proactive 段），默认全部开启。
 	Proactive ProactiveConfig
 
+	// Genesis 是 MetaAgent 诞生流程配置（yaml genesis 段）。
+	Genesis GenesisConfig
+
 	// ConfigPath 是实际使用的配置文件路径（纯 env 模式为空）。
 	ConfigPath string
 }
+
+// GenesisConfig 是 MetaAgent 诞生（internal/metaagent）的运行参数。
+type GenesisConfig struct {
+	// Timeout 是单次诞生（LLM 或脚本）上限，默认 90s；超时走 fallback。
+	Timeout time.Duration
+	// ScriptPace 是无 LLM 时脚本各阶段之间的间隔，便于 SSE 剧场观感；
+	// 默认 80ms；0 表示尽快跑完（测试常用）。
+	ScriptPace time.Duration
+	// LegacyCreate 控制旧 POST /v1/pets：
+	//   "instant"（默认）— 即时模板创建，无 genesis SSE；
+	//   "birth" — 转发到 MetaAgent 诞生（await_soul，响应仍为 petView）。
+	LegacyCreate string
+}
+
+// 旧创建路径合法值。
+const (
+	LegacyCreateInstant = "instant"
+	LegacyCreateBirth   = "birth"
+)
 
 // ProactiveConfig 是状态驱动主动行为（internal/proactive）的开关组。
 type ProactiveConfig struct {
@@ -118,6 +144,11 @@ type fileConfig struct {
 	Log struct {
 		Level string `yaml:"level"`
 	} `yaml:"log"`
+	Genesis struct {
+		TimeoutSeconds int    `yaml:"timeout_seconds"`
+		ScriptPaceMS   *int   `yaml:"script_pace_ms"` // 指针：区分未配置与显式 0
+		LegacyCreate   string `yaml:"legacy_create"`  // instant | birth
+	} `yaml:"genesis"`
 }
 
 // Load 加载配置：flagPath 为 -config 启动参数（空则按规则探测）。
@@ -131,6 +162,11 @@ func Load(flagPath string) (Config, error) {
 		DataRoot:     "data",
 		SkillsDir:    "skills",
 		Proactive:    ProactiveConfig{Enabled: true, AutoSleep: true, AutoWake: true, Messages: true},
+		Genesis: GenesisConfig{
+			Timeout:      90 * time.Second,
+			ScriptPace:   80 * time.Millisecond,
+			LegacyCreate: LegacyCreateInstant,
+		},
 	}
 
 	// 1. 定位并应用配置文件。
@@ -209,6 +245,29 @@ func (cfg *Config) applyFile(path string) error {
 	applyBool(&cfg.Proactive.AutoWake, fc.Proactive.AutoWake)
 	applyBool(&cfg.Proactive.Messages, fc.Proactive.Messages)
 
+	if fc.Genesis.TimeoutSeconds > 0 {
+		cfg.Genesis.Timeout = time.Duration(fc.Genesis.TimeoutSeconds) * time.Second
+	}
+	if fc.Genesis.ScriptPaceMS != nil {
+		if *fc.Genesis.ScriptPaceMS < 0 {
+			cfg.Genesis.ScriptPace = 0
+		} else {
+			cfg.Genesis.ScriptPace = time.Duration(*fc.Genesis.ScriptPaceMS) * time.Millisecond
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(fc.Genesis.LegacyCreate)) {
+	case LegacyCreateBirth:
+		cfg.Genesis.LegacyCreate = LegacyCreateBirth
+	case LegacyCreateInstant, "":
+		// 保持默认 / 显式 instant
+		if fc.Genesis.LegacyCreate != "" {
+			cfg.Genesis.LegacyCreate = LegacyCreateInstant
+		}
+	default:
+		slog.Warn("config: unknown genesis.legacy_create, using instant", "value", fc.Genesis.LegacyCreate)
+		cfg.Genesis.LegacyCreate = LegacyCreateInstant
+	}
+
 	// LLM 连接配置：扁平单端点（OpenAI Chat Completions 兼容），密钥直接写在文件里。
 	cfg.LLM = llm.Config{
 		Model:   fc.LLM.Model,
@@ -251,6 +310,26 @@ func (cfg *Config) applyEnv() {
 			cfg.MCPServers = servers // 整体覆盖文件列表
 		} else {
 			slog.Warn("config: ignore malformed POCKETPET_MCP_SERVERS", "err", err)
+		}
+	}
+	if v := os.Getenv(EnvGenesisTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Genesis.Timeout = d
+		}
+	}
+	if v := os.Getenv(EnvGenesisScriptPace); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			cfg.Genesis.ScriptPace = d
+		}
+	}
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv(EnvGenesisLegacyCreate))); v != "" {
+		switch v {
+		case LegacyCreateBirth:
+			cfg.Genesis.LegacyCreate = LegacyCreateBirth
+		case LegacyCreateInstant:
+			cfg.Genesis.LegacyCreate = LegacyCreateInstant
+		default:
+			slog.Warn("config: unknown POCKETPET_GENESIS_LEGACY_CREATE, keeping prior", "value", v)
 		}
 	}
 }

@@ -116,12 +116,15 @@ func main() {
 		ExtraTools: registry.Tools(),
 	})
 	midwife := &metaagent.Midwife{
-		Engine: engine,
-		FS:     pfs,
-		Emit:   engine.Emit,
-		LLM:    llmCfg,
+		Engine:       engine,
+		FS:           pfs,
+		Emit:         engine.Emit,
+		LLM:          llmCfg,
+		BirthTimeout: cfg.Genesis.Timeout,
+		ScriptPace:   cfg.Genesis.ScriptPace,
 	}
 	server := api.NewServer(st, engine, hub, pfs, petAgent, midwife)
+	server.LegacyCreate = cfg.Genesis.LegacyCreate
 	for _, pr := range registry.Routes() {
 		server.RegisterPluginRoutes(pr.Plugin, pr.Routes)
 	}

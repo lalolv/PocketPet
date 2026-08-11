@@ -21,6 +21,7 @@ type Draft struct {
 	Master   string `json:"master"`
 	ReqName  string `json:"req_name,omitempty"` // 请求里预填的名字
 	Fallback bool   `json:"fallback,omitempty"`
+	Via      string `json:"via,omitempty"` // llm | script | fallback
 
 	Done Stage `json:"done"`
 

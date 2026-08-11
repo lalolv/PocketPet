@@ -50,6 +50,14 @@ func (w *Workshop) persist() error {
 	return w.midwife.FS.SaveGenesisDraft(w.draft.PetID, raw)
 }
 
+func (w *Workshop) setVia(via string) error {
+	w.draft.Via = via
+	if via == ViaFallback {
+		w.draft.Fallback = true
+	}
+	return w.persist()
+}
+
 // Narrate 发送旁白（不推进阶段）。
 func (w *Workshop) Narrate(ctx context.Context, stage, text string) {
 	text = strings.TrimSpace(text)
@@ -291,10 +299,19 @@ func (w *Workshop) FinalizeBirth(ctx context.Context) ToolResult {
 	w.draft.mark(StageFinalized)
 	_ = w.midwife.FS.RemoveGenesisDraft(w.draft.PetID)
 
+	via := w.draft.Via
+	if via == "" {
+		if w.draft.Fallback {
+			via = ViaFallback
+		} else {
+			via = ViaScript
+		}
+	}
 	ready := map[string]any{
 		"pet_id":   p.ID,
 		"name":     p.Name,
 		"fallback": w.draft.Fallback,
+		"via":      via,
 	}
 	w.midwife.emitJSON(ctx, p.ID, pet.EventGenesisReady, ready)
 	return okResult("birth complete", ready)

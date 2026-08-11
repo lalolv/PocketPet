@@ -86,8 +86,8 @@ llm:
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/v1/pets` | 创建宠物（即时模板路径） |
-| POST | `/v1/pets/birth` | MetaAgent 分阶段诞生（SSE `genesis.*`） |
+| POST | `/v1/pets` | 创建宠物（默认即时模板；`genesis.legacy_create=birth` 时转发 MetaAgent） |
+| POST | `/v1/pets/birth` | MetaAgent 分阶段诞生（SSE `genesis.*`；可选 `await_soul`） |
 | GET | `/v1/pets` / `/v1/pets/{id}` | 列表 / 状态查询 |
 | POST | `/v1/pets/{id}/chat` | 和宠物对话（`?stream=true` SSE 流式） |
 | POST | `/v1/pets/{id}/care` | 照顾动作（feed / play / clean） |
@@ -109,6 +109,7 @@ llm:
 │   ├── dream/           # 梦境整理：记忆凝练、SOUL 演化、Skill 沉淀
 │   ├── proactive/       # 主动行为：状态触发的主动消息、自动入睡/醒来
 │   ├── llm/             # LLM 连接工厂（OpenAI Chat Completions 兼容端点）
+│   ├── metaagent/       # MetaAgent 诞生：工具链 / 脚本 / fallback
 │   ├── api/             # REST + SSE 接口层
 │   ├── store/           # SQLite：数值状态 + 事件流水
 │   ├── petfs/           # 宠物文件系统（PET/SOUL/MEMORY/skills）

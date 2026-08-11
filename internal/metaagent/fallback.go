@@ -10,6 +10,8 @@ import (
 func (w *Workshop) FillMissing(ctx context.Context) {
 	d := w.draft
 	d.Fallback = true
+	d.Via = ViaFallback
+	_ = w.persist()
 
 	if !d.has(StageGenes) {
 		_ = w.RollGenes(ctx, nil)

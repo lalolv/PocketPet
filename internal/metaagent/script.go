@@ -4,16 +4,32 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
-// RunScript 用确定性内容按阶段调用工具（G1 假 MetaAgent，不依赖 LLM）。
-// 每一步先发旁白，再调工具；失败则 FillMissing + finalize。
-func (m *Midwife) RunScript(ctx context.Context, petID string) error {
+// RunScript 用确定性内容按阶段调用工具（无 LLM / ForceScript）。
+// 每一步先发旁白，再调工具；阶段间可按 ScriptPace 停顿；失败则 FillMissing + finalize。
+func (m *Midwife) RunScript(ctx context.Context, petID string) (string, error) {
 	w, err := m.loadWorkshop(petID)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if err := w.setVia(ViaScript); err != nil {
+		return "", err
 	}
 	d := w.draft
+
+	pace := func() {
+		if m.ScriptPace <= 0 {
+			return
+		}
+		t := time.NewTimer(m.ScriptPace)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+		}
+	}
 
 	step := func(stage string, narrate string, call func() ToolResult) bool {
 		if ctx.Err() != nil {
@@ -25,6 +41,7 @@ func (m *Midwife) RunScript(ctx context.Context, petID string) error {
 			slog.Warn("metaagent: script step failed", "pet", petID, "stage", stage, "err", res.Error)
 			return false
 		}
+		pace()
 		return true
 	}
 
@@ -83,15 +100,15 @@ func (m *Midwife) RunScript(ctx context.Context, petID string) error {
 	if !res.OK {
 		return m.finishWithFallback(ctx, w, res.Error)
 	}
-	slog.Info("metaagent: birth ready", "pet", petID, "name", d.Name)
-	return nil
+	slog.Info("metaagent: birth ready", "pet", petID, "name", d.Name, "via", ViaScript)
+	return ViaScript, nil
 }
 
-func (m *Midwife) finishWithFallback(ctx context.Context, w *Workshop, reason string) error {
+func (m *Midwife) finishWithFallback(ctx context.Context, w *Workshop, reason string) (string, error) {
 	m.emitFailed(ctx, w.draft.PetID, reason, true)
 	res := w.EnsureComplete(ctx)
 	if !res.OK {
-		return fmt.Errorf("metaagent: fallback finalize failed: %s", res.Error)
+		return ViaFallback, fmt.Errorf("metaagent: fallback finalize failed: %s", res.Error)
 	}
-	return nil
+	return ViaFallback, nil
 }

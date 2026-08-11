@@ -178,6 +178,59 @@ func TestBirthPetFlow(t *testing.T) {
 	}
 }
 
+func TestBirthAwaitSoul(t *testing.T) {
+	env := setup(t)
+	// setup 里 Sync=true；这里显式 await_soul，响应应带 ready + via
+	status, body := doJSON(t, "POST", env.srv.URL+"/v1/pets/birth",
+		`{"species":"dog","mode":"random","seed":"await-api","await_soul":true}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body = %v", status, body)
+	}
+	if body["genesis_status"] != "ready" || body["via"] != "script" {
+		t.Fatalf("body = %v", body)
+	}
+}
+
+func TestLegacyCreateBirth(t *testing.T) {
+	// 另建一套 midwife + LegacyCreate=birth
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	clock := pet.NewFakeClock(t0)
+	hub := NewHub()
+	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
+	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
+	ag := agent.New(engine, fs, llm.Config{})
+	midwife := &metaagent.Midwife{
+		Engine: engine, FS: fs, Emit: engine.Emit, ForceScript: true,
+		Now: func() time.Time { return clock.Now() },
+	}
+	apiSrv := NewServer(st, engine, hub, fs, ag, midwife)
+	apiSrv.LegacyCreate = "birth"
+	srv := httptest.NewServer(apiSrv.Handler())
+	t.Cleanup(srv.Close)
+
+	status, body := doJSON(t, "POST", srv.URL+"/v1/pets",
+		`{"name":"旧路","species":"cat","personality":"lively"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body = %v", status, body)
+	}
+	if body["name"] != "旧路" || body["genesis_status"] != "ready" {
+		t.Fatalf("petView = %v", body)
+	}
+	id, _ := body["id"].(string)
+	soulStatus, soulBody := doJSON(t, "GET", srv.URL+"/v1/pets/"+id+"/soul", "")
+	if soulStatus != http.StatusOK {
+		t.Fatalf("soul = %d %v", soulStatus, soulBody)
+	}
+	content, _ := soulBody["content"].(string)
+	if !strings.Contains(content, "template: genesis") {
+		t.Fatalf("soul:\n%s", content)
+	}
+}
+
 func TestInvalidActionReturns4xx(t *testing.T) {
 	env := setup(t)
 	id := createPet(t, env)

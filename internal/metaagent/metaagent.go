@@ -1,5 +1,5 @@
 // Package metaagent 是 MetaAgent 宠物诞生流程。
-// G1：草稿状态机 + 工具 + 脚本跑通；G2：真 LLM MetaAgent（工具调用）+ 超时 fallback。
+// G1 工具/脚本 → G2 LLM → G3 超时/降级/兼容 → G4 特质修饰与剧场。
 // 设计见 docs/04-MetaAgent宠物诞生设计.md。
 package metaagent
 
@@ -18,6 +18,13 @@ const (
 	ModeRandom   = "random"
 	ModeDescribe = "describe"
 	ModeTemplate = "template"
+)
+
+// 诞生路径标记（写入 genesis.ready / BirthResult.Via）。
+const (
+	ViaLLM      = "llm"
+	ViaScript   = "script"
+	ViaFallback = "fallback"
 )
 
 // TraitKeys 是数值修饰器用的固定特质词表（顺序稳定，便于测试）。
@@ -55,9 +62,12 @@ type Request struct {
 	Prompt      string // describe / random 软愿望
 	Seed        string // 空则服务端生成
 	Master      string // 空 = 主人
+	// AwaitSoul 为 true 时 Start 同步跑完诞生再返回（genesis_status=ready）；
+	// 适合旧 API 兼容与集成测试。默认 false（201 后异步孵化）。
+	AwaitSoul bool
 }
 
-// BirthResult 是 Start 的同步返回（孵化仍可能在后台继续）。
+// BirthResult 是 Start 的返回值。
 type BirthResult struct {
 	PetID         string `json:"id"`
 	Seed          string `json:"seed"`
@@ -65,6 +75,8 @@ type BirthResult struct {
 	Mode          string `json:"mode"`
 	GenesisStatus string `json:"genesis_status"`
 	EventsURL     string `json:"events_url"`
+	// Via 在 AwaitSoul 或已完成时标明路径：llm / script / fallback。
+	Via string `json:"via,omitempty"`
 }
 
 // Emitter 把诞生事件落库并推送（通常接 tick.Engine.Emit）。
@@ -83,9 +95,12 @@ type Midwife struct {
 	ModelFactory ModelFactory
 	// BirthTimeout 单次诞生上限；<=0 则用默认 90s。
 	BirthTimeout time.Duration
-	// ForceScript 强制走 G1 脚本（测试或显式降级）。
+	// ScriptPace 无 LLM 脚本阶段间隔；0=尽快（测试）；生产默认约 80ms。
+	ScriptPace time.Duration
+	// ForceScript 强制走脚本（测试或显式降级）。
 	ForceScript bool
 	// Sync 为 true 时 Start 内同步跑完（测试用）；默认异步。
+	// 请求级 AwaitSoul 也会强制同步。
 	Sync bool
 }
 
@@ -100,4 +115,11 @@ func (m *Midwife) emit(ctx context.Context, evs ...pet.Event) {
 	if m.Emit != nil {
 		m.Emit(ctx, evs...)
 	}
+}
+
+func (m *Midwife) birthTimeout() time.Duration {
+	if m.BirthTimeout > 0 {
+		return m.BirthTimeout
+	}
+	return defaultBirthTimeout
 }

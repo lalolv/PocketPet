@@ -27,57 +27,60 @@ const defaultBirthTimeout = 90 * time.Second
 type ModelFactory func(ctx context.Context, cfg llm.Config) (adkmodel.LLM, error)
 
 // RunBirth 执行一次诞生：优先 LLM MetaAgent，未配置或 ForceScript 时走脚本。
-// 失败/超时则 EnsureComplete（fallback）。
-func (m *Midwife) RunBirth(ctx context.Context, petID string) error {
+// 失败/超时则 EnsureComplete（fallback）。返回实际路径 via。
+func (m *Midwife) RunBirth(ctx context.Context, petID string) (string, error) {
 	w, err := m.loadWorkshop(petID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if w.draft.has(StageFinalized) {
-		return nil
+		via := w.draft.Via
+		if via == "" {
+			via = ViaScript
+		}
+		return via, nil
 	}
 
-	timeout := m.BirthTimeout
-	if timeout <= 0 {
-		timeout = defaultBirthTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := context.WithTimeout(ctx, m.birthTimeout())
 	defer cancel()
 
 	useLLM := !m.ForceScript && m.LLM.Configured()
-	if useLLM {
-		err = m.runLLM(runCtx, w)
-		if err == nil && w.draft.has(StageFinalized) {
-			return nil
-		}
-		reason := "incomplete after LLM run"
-		if err != nil {
-			reason = err.Error()
-			slog.Warn("metaagent: LLM birth failed, falling back", "pet", petID, "err", err)
-		} else {
-			slog.Warn("metaagent: LLM finished without finalize, falling back", "pet", petID)
-		}
-		m.emitFailed(ctx, petID, reason, true)
-
-		// finalize 成功会删草稿；仅在仍有草稿时 fallback。
-		if _, loadErr := m.FS.LoadGenesisDraft(petID); loadErr != nil {
-			if w.draft.has(StageFinalized) {
-				return nil
-			}
-			return fmt.Errorf("metaagent: LLM failed and draft missing: %v", err)
-		}
-		w, err = m.loadWorkshop(petID)
-		if err != nil {
-			return err
-		}
-		res := w.EnsureComplete(ctx)
-		if !res.OK {
-			return fmt.Errorf("metaagent: fallback after LLM: %s", res.Error)
-		}
-		return nil
+	if !useLLM {
+		return m.RunScript(runCtx, petID)
 	}
 
-	return m.RunScript(runCtx, petID)
+	if err := w.setVia(ViaLLM); err != nil {
+		return "", err
+	}
+	err = m.runLLM(runCtx, w)
+	if err == nil && w.draft.has(StageFinalized) {
+		return ViaLLM, nil
+	}
+	reason := "incomplete after LLM run"
+	if err != nil {
+		reason = err.Error()
+		slog.Warn("metaagent: LLM birth failed, falling back", "pet", petID, "err", err)
+	} else {
+		slog.Warn("metaagent: LLM finished without finalize, falling back", "pet", petID)
+	}
+	m.emitFailed(ctx, petID, reason, true)
+
+	// finalize 成功会删草稿；仅在仍有草稿时 fallback。
+	if _, loadErr := m.FS.LoadGenesisDraft(petID); loadErr != nil {
+		if w.draft.has(StageFinalized) {
+			return ViaLLM, nil
+		}
+		return "", fmt.Errorf("metaagent: LLM failed and draft missing: %v", err)
+	}
+	w, err = m.loadWorkshop(petID)
+	if err != nil {
+		return "", err
+	}
+	res := w.EnsureComplete(ctx)
+	if !res.OK {
+		return ViaFallback, fmt.Errorf("metaagent: fallback after LLM: %s", res.Error)
+	}
+	return ViaFallback, nil
 }
 
 func (m *Midwife) runLLM(ctx context.Context, w *Workshop) error {

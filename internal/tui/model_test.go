@@ -89,6 +89,59 @@ func TestEmptyListGoesCreate(t *testing.T) {
 	}
 }
 
+func TestBirthTheaterFlow(t *testing.T) {
+	m := NewModel(NewClient("http://unused"))
+	m.createName = "团团"
+	m = update(t, m, birthStartMsg{
+		ID: "pid1", Seed: "abcdef0123456789", Species: "cat", Mode: "random", GenesisStatus: "incubating",
+	})
+	if m.screen != screenBirth || m.pet.ID != "pid1" {
+		t.Fatalf("screen=%v pet=%+v", m.screen, m.pet)
+	}
+	if len(m.birthLog) == 0 {
+		t.Fatal("expected birth log")
+	}
+	view := m.renderString()
+	if !strings.Contains(view, "诞生中") || !strings.Contains(view, "团团") {
+		t.Fatalf("view = %q", view)
+	}
+
+	m2, cmd := m.Update(eventMsg{Type: "genesis.temperament", Message: `{"label":"粘人社恐","blurb":"x"}`})
+	m = m2.(model)
+	if cmd == nil {
+		t.Fatal("should keep waiting events")
+	}
+	found := false
+	for _, line := range m.birthLog {
+		if strings.Contains(line, "粘人社恐") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("birthLog = %v", m.birthLog)
+	}
+
+	m2, cmd = m.Update(eventMsg{Type: "genesis.ready", Message: `{"pet_id":"pid1"}`})
+	m = m2.(model)
+	if !m.birthReady || cmd == nil {
+		t.Fatalf("ready=%v cmd=%v", m.birthReady, cmd != nil)
+	}
+
+	m = update(t, m, petMsg(testPet()))
+	if m.screen != screenMain {
+		t.Fatalf("screen = %v after pet ready", m.screen)
+	}
+}
+
+func TestFormatGenesisLine(t *testing.T) {
+	if got := formatGenesisLine(Event{Type: "genesis.genes", Message: `{}`}); got == "" {
+		t.Fatal("genes")
+	}
+	if got := formatGenesisLine(Event{Type: "genesis.narration", Message: `{"text":"光纹浮现"}`}); got != "光纹浮现" {
+		t.Fatalf("narration = %q", got)
+	}
+}
+
 // TestCareKeysAndAnim 验证照顾按键：动作动画立即播放，若干帧后回到 idle。
 func TestCareKeysAndAnim(t *testing.T) {
 	m := NewModel(NewClient("http://unused"))

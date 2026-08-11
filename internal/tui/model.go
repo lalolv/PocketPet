@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +27,7 @@ const (
 	screenLoading screen = iota // 启动加载中
 	screenSelect                // 选宠
 	screenCreate                // 创建表单
+	screenBirth                 // MetaAgent 诞生剧场
 	screenMain                  // 主界面
 	screenOffline               // 服务器不可达
 )
@@ -45,7 +47,10 @@ const (
 var (
 	speciesOptions     = []string{"cat", "dog", "blob"}
 	personalityOptions = []string{"", "lively", "quiet", "tsundere"}
-	personalityLabels  = map[string]string{"": "随机", "lively": "活泼", "quiet": "安静", "tsundere": "傲娇"}
+	personalityLabels  = map[string]string{
+		"": "盲盒", "lively": "活泼", "quiet": "安静", "tsundere": "傲娇",
+		"genesis": "天生",
+	}
 )
 
 // model 是 Bubble Tea 主模型。
@@ -60,6 +65,8 @@ type model struct {
 	createName           string
 	createSpeciesIdx     int
 	createPersonalityIdx int
+	birthLog             []string // 诞生剧场旁白/阶段行
+	birthReady           bool     // 已收到 genesis.ready，避免重复 get
 
 	// 主界面
 	pet        Pet
@@ -94,11 +101,12 @@ type (
 	tickMsg       time.Time // 动画帧
 	petsMsg       []Pet     // 宠物列表
 	petMsg        Pet       // 宠物状态（get/care 响应）
-	createdMsg    Pet       // 创建成功
-	chatEventMsg  chatEvent // 聊天流事件
-	eventMsg      Event     // SSE 事件
-	stateMsg      PetState  // SSE 状态快照
-	errMsg        errorWrap // 错误（含来源）
+	createdMsg    Pet         // 创建成功（旧路径）
+	birthStartMsg BirthResult // MetaAgent 诞生开始
+	chatEventMsg  chatEvent   // 聊天流事件
+	eventMsg      Event       // SSE 事件
+	stateMsg      PetState    // SSE 状态快照
+	errMsg        errorWrap   // 错误（含来源）
 	careResultMsg struct {
 		pet    Pet
 		action string
@@ -150,11 +158,11 @@ func getPetCmd(c *Client, id string) tea.Cmd {
 
 func createCmd(c *Client, name, species, personality string) tea.Cmd {
 	return func() tea.Msg {
-		p, err := c.CreatePet(context.Background(), name, species, personality)
+		res, err := c.BirthPet(context.Background(), name, species, personality)
 		if err != nil {
 			return errMsg{"create", err}
 		}
-		return createdMsg(p)
+		return birthStartMsg(res)
 	}
 }
 
@@ -264,12 +272,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pet = Pet(msg)
 		m.petLoading = false
 		m.screen = screenMain
+		m.birthReady = false
 		m.logf("欢迎来到这个世界，%s！", m.pet.Name)
+		return m, m.startSSE()
+
+	case birthStartMsg:
+		res := BirthResult(msg)
+		// 换宠订阅：停掉旧 SSE（若有）。
+		if m.sseCancel != nil {
+			m.sseCancel()
+			m.sseCancel = nil
+			m.sseCh = nil
+			m.stateCh = nil
+		}
+		m.screen = screenBirth
+		m.birthReady = false
+		m.birthLog = []string{"一颗蛋开始发光……"}
+		m.pet = Pet{
+			ID: res.ID, Name: m.createName, Species: res.Species,
+			Stage: "egg", Alive: true, GenesisStatus: res.GenesisStatus,
+		}
+		m.petLoading = true
+		m.logf("正在孵化 %s（种子 %s）", m.createName, shortSeed(res.Seed))
 		return m, m.startSSE()
 
 	case petMsg:
 		m.pet = Pet(msg)
 		m.petLoading = false
+		if m.screen == screenBirth {
+			m.screen = screenMain
+			m.birthReady = false
+			m.logf("欢迎来到这个世界，%s！", m.pet.Name)
+		}
 		if m.screen == screenLoading {
 			m.screen = screenMain
 		}
@@ -359,6 +393,9 @@ func (m model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.onSelectKey(k)
 	case screenCreate:
 		return m.onCreateKey(k)
+	case screenBirth:
+		// 诞生中只允许退出；esc 不中断孵化（后台继续）。
+		return m, nil
 	case screenMain:
 		return m.onMainKey(k)
 	case screenOffline:
@@ -422,7 +459,7 @@ func (m model) onCreateKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.logf("先给宠物起个名字吧")
 			return m, nil
 		}
-		m.logf("正在等待 %s 诞生……", m.createName)
+		m.logf("正在唤醒造物主，孵化 %s……", m.createName)
 		return m, createCmd(m.client, strings.TrimSpace(m.createName),
 			speciesOptions[m.createSpeciesIdx], personalityOptions[m.createPersonalityIdx])
 	}
@@ -505,12 +542,22 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // onEvent 处理一条 SSE 事件：进日志 + 同步动画/标志。
 // 数值与阶段由随后的 state 帧刷新（结算/动作后服务端必推），这里不再补发 GET。
 func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
+	if strings.HasPrefix(ev.Type, "genesis.") {
+		return m.onGenesisEvent(ev)
+	}
 	switch ev.Type {
 	case "_sys": // 客户端自身的连接提示（重连等）
 		m.logf("· %s", ev.Message)
 		return m, waitEventCmd(m.sseCh)
 	case "pet.proactive", "pet.dream": // 宠物主动说的话，与聊天回复同格式
 		m.logf("[%s]: %s", m.pet.Name, ev.Message)
+	case "pet.born":
+		if m.screen == screenBirth && !m.birthReady {
+			m.birthReady = true
+			m.appendBirth("破壳了！")
+			return m, tea.Batch(waitEventCmd(m.sseCh), getPetCmd(m.client, m.pet.ID))
+		}
+		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	default: // 状态变化通知；落库时间为 UTC，显示前转本地时区
 		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	}
@@ -527,6 +574,74 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 		m.pet.Alive = false
 	}
 	return m, waitEventCmd(m.sseCh)
+}
+
+func (m model) onGenesisEvent(ev Event) (tea.Model, tea.Cmd) {
+	if line := formatGenesisLine(ev); line != "" {
+		m.appendBirth(line)
+	}
+	cmd := waitEventCmd(m.sseCh)
+	if ev.Type == "genesis.ready" && m.screen == screenBirth && !m.birthReady {
+		m.birthReady = true
+		m.appendBirth("新生命睁开了眼睛。")
+		return m, tea.Batch(cmd, getPetCmd(m.client, m.pet.ID))
+	}
+	return m, cmd
+}
+
+func (m *model) appendBirth(line string) {
+	m.birthLog = append(m.birthLog, line)
+	if len(m.birthLog) > 12 {
+		m.birthLog = m.birthLog[len(m.birthLog)-12:]
+	}
+}
+
+func shortSeed(seed string) string {
+	if len(seed) <= 8 {
+		return seed
+	}
+	return seed[:8]
+}
+
+// formatGenesisLine 把 genesis.* 事件的 JSON message 收成一行剧场文案。
+func formatGenesisLine(ev Event) string {
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(ev.Message), &payload)
+	switch ev.Type {
+	case "genesis.started":
+		return "造物主落笔……"
+	case "genesis.narration":
+		if t, ok := payload["text"].(string); ok && t != "" {
+			return t
+		}
+	case "genesis.genes":
+		return "✦ 基因觉醒"
+	case "genesis.temperament":
+		label, _ := payload["label"].(string)
+		if label != "" {
+			return "✦ 气质成形：" + label
+		}
+		return "✦ 气质成形"
+	case "genesis.appearance":
+		return "✦ 外貌显现"
+	case "genesis.quirks":
+		return "✦ 癖好落定"
+	case "genesis.soul":
+		return "✦ 灵魂注入"
+	case "genesis.stats":
+		return "✦ 生命力铺开"
+	case "genesis.identity":
+		name, _ := payload["name"].(string)
+		if name != "" {
+			return "✦ 它叫 " + name
+		}
+		return "✦ 身份确认"
+	case "genesis.ready":
+		return "✦ 诞生完成"
+	case "genesis.failed":
+		return "· 造物波折，改用稳妥配方……"
+	}
+	return ""
 }
 
 // onError 处理异步错误：连接失败进离线页，业务错误进日志。

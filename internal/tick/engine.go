@@ -46,11 +46,15 @@ type TickHook interface {
 	OnTick(ctx context.Context, now time.Time)
 }
 
+// TraitsLoader 按宠物 ID 返回当前 SOUL 特质；返回中性值表示不修饰。
+type TraitsLoader func(petID string) pet.Traits
+
 // Engine 驱动宠物的周期结算与状态变更，是 pet/store 之上的协调层。
 type Engine struct {
 	store      *store.Store
 	sink       EventSink // 可为 nil（仅落库不推送）
 	stateSink  StateSink // 可为 nil（不推状态快照）
+	traits     TraitsLoader
 	interval   time.Duration
 	offlineMax time.Duration
 	clock      pet.Clock
@@ -109,6 +113,16 @@ func (e *Engine) AddTickHook(h TickHook) {
 // SetStateSink 注册状态快照订阅方（如 SSE hub；应在 Run 前完成设置）。
 func (e *Engine) SetStateSink(s StateSink) { e.stateSink = s }
 
+// SetTraitsLoader 注册 SOUL 特质加载器（G4 性格数值修饰；应在 Run 前设置）。
+func (e *Engine) SetTraitsLoader(fn TraitsLoader) { e.traits = fn }
+
+func (e *Engine) traitsOf(id string) pet.Traits {
+	if e.traits != nil {
+		return e.traits(id)
+	}
+	return pet.NeutralTraits()
+}
+
 // publishState 把最新状态快照推给订阅方（若有）。
 func (e *Engine) publishState(p *pet.Pet) {
 	if e.stateSink != nil {
@@ -150,12 +164,62 @@ func (e *Engine) CreatePet(ctx context.Context, name, species string) (*pet.Pet,
 	defer unlock()
 
 	p := pet.New(id, name, species, e.clock.Now())
+	p.GenesisStatus = pet.GenesisReady
 	if err := e.store.SavePet(ctx, p); err != nil {
 		return nil, err
 	}
 	slog.Info("pet born", "pet", id, "name", name, "species", species)
 	e.emit(ctx, []pet.Event{{PetID: id, Type: pet.EventBorn,
 		Message: name + " 出生了，是一只 " + species, CreatedAt: e.clock.Now()}})
+	e.publishState(p)
+	return p, nil
+}
+
+// BeginBirth 创建一只孵化中的宠物蛋（不发 pet.born，等 MetaAgent finalize）。
+func (e *Engine) BeginBirth(ctx context.Context, name, species string) (*pet.Pet, error) {
+	id, err := newID()
+	if err != nil {
+		return nil, err
+	}
+	unlock := e.lock(id)
+	defer unlock()
+
+	if name == "" {
+		name = "（破壳中）"
+	}
+	p := pet.New(id, name, species, e.clock.Now())
+	p.GenesisStatus = pet.GenesisIncubating
+	if err := e.store.SavePet(ctx, p); err != nil {
+		return nil, err
+	}
+	slog.Info("pet incubating", "pet", id, "species", species)
+	e.publishState(p)
+	return p, nil
+}
+
+// FinalizeBirth 把孵化中的宠物提交为可互动状态：写入名字与初始 Stats，发 pet.born。
+func (e *Engine) FinalizeBirth(ctx context.Context, id, name string, stats pet.Stats) (*pet.Pet, error) {
+	unlock := e.lock(id)
+	defer unlock()
+
+	p, err := e.store.GetPet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !p.Incubating() {
+		return nil, pet.ErrNotIncubating
+	}
+	if name != "" {
+		p.Name = name
+	}
+	p.ApplyBirthStats(stats)
+	p.GenesisStatus = pet.GenesisReady
+	if err := e.store.SavePet(ctx, p); err != nil {
+		return nil, err
+	}
+	slog.Info("pet born", "pet", id, "name", p.Name, "species", p.Species, "via", "genesis")
+	e.emit(ctx, []pet.Event{{PetID: id, Type: pet.EventBorn,
+		Message: p.Name + " 出生了，是一只 " + p.Species, CreatedAt: e.clock.Now()}})
 	e.publishState(p)
 	return p, nil
 }
@@ -178,7 +242,8 @@ func (e *Engine) settle(ctx context.Context, id string) (*pet.Pet, error) {
 	if err != nil {
 		return nil, err
 	}
-	evs := p.Tick(e.clock.Now(), e.offlineMax)
+	tr := e.traitsOf(id)
+	evs := p.TickTraits(e.clock.Now(), e.offlineMax, tr)
 	if err := e.store.SavePet(ctx, p); err != nil {
 		return nil, err
 	}
@@ -197,9 +262,13 @@ func (e *Engine) Care(ctx context.Context, id string, action pet.Action) (*pet.P
 	if err != nil {
 		return nil, err
 	}
+	if p.Incubating() {
+		return nil, pet.ErrIncubating
+	}
 	now := e.clock.Now()
-	evs := p.Tick(now, e.offlineMax)
-	careEvs, err := p.Care(action, now)
+	tr := e.traitsOf(id)
+	evs := p.TickTraits(now, e.offlineMax, tr)
+	careEvs, err := p.CareTraits(action, now, tr)
 	if err != nil {
 		// 衰减部分已生效，保存后返回错误。
 		_ = e.store.SavePet(ctx, p)
@@ -227,7 +296,8 @@ func (e *Engine) Adjust(ctx context.Context, id string, delta pet.Stats) (*pet.P
 		return nil, err
 	}
 	now := e.clock.Now()
-	evs := p.Tick(now, e.offlineMax)
+	tr := e.traitsOf(id)
+	evs := p.TickTraits(now, e.offlineMax, tr)
 	evs = append(evs, p.Adjust(delta, now)...)
 	if err := e.store.SavePet(ctx, p); err != nil {
 		return nil, err

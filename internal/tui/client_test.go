@@ -12,6 +12,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/agent"
 	"github.com/lalolv/PocketPet/internal/api"
 	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/metaagent"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/store"
@@ -37,8 +38,19 @@ func newTestServer(t *testing.T) *testServer {
 	hub := api.NewHub()
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
+	engine.SetTraitsLoader(func(id string) pet.Traits {
+		doc, err := fs.ReadSoulDoc(id)
+		if err != nil {
+			return pet.NeutralTraits()
+		}
+		return pet.TraitsFromMap(doc.Traits)
+	})
 	ag := agent.New(engine, fs, llm.Config{})
-	srv := httptest.NewServer(api.NewServer(st, engine, hub, fs, ag).Handler())
+	midwife := &metaagent.Midwife{
+		Engine: engine, FS: fs, Emit: engine.Emit, Sync: true, ForceScript: true,
+		Now: func() time.Time { return clock.Now() },
+	}
+	srv := httptest.NewServer(api.NewServer(st, engine, hub, fs, ag, midwife).Handler())
 	t.Cleanup(srv.Close)
 	return &testServer{srv: srv, clock: clock}
 }
@@ -63,9 +75,22 @@ func TestClientREST(t *testing.T) {
 		t.Fatalf("created = %+v", p)
 	}
 
+	// MetaAgent 诞生路径
+	br, err := c.BirthPet(ctx, "雪球", "cat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if br.ID == "" || br.Mode != "random" {
+		t.Fatalf("birth = %+v", br)
+	}
+	born, err := c.GetPet(ctx, br.ID)
+	if err != nil || born.GenesisStatus != "ready" || born.Name != "雪球" {
+		t.Fatalf("after birth get = %+v, %v", born, err)
+	}
+
 	// 列表 / 单查
 	pets, err = c.ListPets(ctx)
-	if err != nil || len(pets) != 1 {
+	if err != nil || len(pets) != 2 {
 		t.Fatalf("list = %v, %v", pets, err)
 	}
 	got, err := c.GetPet(ctx, p.ID)

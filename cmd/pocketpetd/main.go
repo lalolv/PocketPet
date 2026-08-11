@@ -18,6 +18,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/api"
 	"github.com/lalolv/PocketPet/internal/config"
 	"github.com/lalolv/PocketPet/internal/dream"
+	"github.com/lalolv/PocketPet/internal/metaagent"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/plugin"
@@ -87,6 +88,13 @@ func main() {
 	sink := tick.MultiSink{hub, stageSync, organizer, monitor}
 	sink = append(sink, registry.EventSinks()...)
 	engine := tick.NewEngine(st, sink, cfg.TickInterval, cfg.OfflineMax, pet.RealClock{})
+	engine.SetTraitsLoader(func(id string) pet.Traits {
+		doc, err := pfs.ReadSoulDoc(id)
+		if err != nil {
+			return pet.NeutralTraits()
+		}
+		return pet.TraitsFromMap(doc.Traits)
+	})
 	organizer.Emitter = engine.Emit
 	monitor.Engine = engine
 	monitor.Emitter = engine.Emit
@@ -107,7 +115,13 @@ func main() {
 		MCPServers: cfg.MCPServers,
 		ExtraTools: registry.Tools(),
 	})
-	server := api.NewServer(st, engine, hub, pfs, petAgent)
+	midwife := &metaagent.Midwife{
+		Engine: engine,
+		FS:     pfs,
+		Emit:   engine.Emit,
+		LLM:    llmCfg,
+	}
+	server := api.NewServer(st, engine, hub, pfs, petAgent, midwife)
 	for _, pr := range registry.Routes() {
 		server.RegisterPluginRoutes(pr.Plugin, pr.Routes)
 	}

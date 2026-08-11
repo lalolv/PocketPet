@@ -67,6 +67,8 @@ func (m model) renderString() string {
 		return m.renderSelect()
 	case screenCreate:
 		return m.renderCreate()
+	case screenBirth:
+		return m.renderBirth()
 	case screenMain:
 		return m.renderMain()
 	}
@@ -109,10 +111,33 @@ func (m model) renderCreate() string {
 	}
 	b.WriteString(field(0, "名字", name))
 	b.WriteString(field(1, "物种", "◀ "+speciesOptions[m.createSpeciesIdx]+" ▶"))
-	b.WriteString(field(2, "性格", "◀ "+personalityLabels[personalityOptions[m.createPersonalityIdx]]+" ▶"))
-	b.WriteString("\n  [tab/↑/↓] 切换项    [◀ ▶] 换选项    [enter] 诞生    [esc] 返回\n")
+	b.WriteString(field(2, "气质", "◀ "+personalityLabels[personalityOptions[m.createPersonalityIdx]]+" ▶"))
+	b.WriteString("\n  [tab/↑/↓] 切换项    [◀ ▶] 换选项    [enter] 开盲盒    [esc] 返回\n")
 	if len(m.logs) > 0 {
 		b.WriteString(faintStyle.Render("\n  " + m.logs[len(m.logs)-1] + "\n"))
+	}
+	return b.String()
+}
+
+// renderBirth 渲染 MetaAgent 诞生剧场：蛋动画 + 阶段旁白。
+func (m model) renderBirth() string {
+	eggs := []string{
+		"    (  )\n   (    )\n  (  ··  )",
+		"    (  )\n   ( ·  )\n  (  ··  )",
+		"    (· )\n   (  · )\n  (  ··  )",
+		"    (  )\n   (  · )\n  ( ··*  )",
+	}
+	egg := eggs[m.frame%len(eggs)]
+	var b strings.Builder
+	b.WriteString("\n  " + headerStyle.Render("诞生中") + "  " + faintStyle.Render(m.createName) + "\n\n")
+	b.WriteString(egg + "\n\n")
+	for _, line := range m.birthLog {
+		b.WriteString("  " + faintStyle.Render(line) + "\n")
+	}
+	if m.birthReady {
+		b.WriteString("\n  " + faintStyle.Render("正在睁开眼睛……") + "\n")
+	} else {
+		b.WriteString("\n  " + faintStyle.Render("造物主书写中，请稍候……  [q] 退出") + "\n")
 	}
 	return b.String()
 }

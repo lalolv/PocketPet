@@ -15,14 +15,25 @@ import (
 
 // Pet 是服务端 petView 的客户端投影。
 type Pet struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Species     string `json:"species"`
-	Stage       string `json:"stage"`
-	Sleeping    bool   `json:"sleeping"`
-	Alive       bool   `json:"alive"`
-	Personality string `json:"personality"`
-	Stats       Stats  `json:"stats"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Species       string `json:"species"`
+	Stage         string `json:"stage"`
+	Sleeping      bool   `json:"sleeping"`
+	Alive         bool   `json:"alive"`
+	Personality   string `json:"personality"`
+	GenesisStatus string `json:"genesis_status"`
+	Stats         Stats  `json:"stats"`
+}
+
+// BirthResult 是 POST /v1/pets/birth 的响应。
+type BirthResult struct {
+	ID            string `json:"id"`
+	Seed          string `json:"seed"`
+	Species       string `json:"species"`
+	Mode          string `json:"mode"`
+	GenesisStatus string `json:"genesis_status"`
+	EventsURL     string `json:"events_url"`
 }
 
 // Stats 是五维属性（服务端已取整）。
@@ -89,7 +100,7 @@ func (c *Client) ListPets(ctx context.Context) ([]Pet, error) {
 	return body.Pets, nil
 }
 
-// CreatePet 创建宠物（personality 可为空 = 随机）。
+// CreatePet 创建宠物（即时模板路径；personality 可为空 = 随机）。
 func (c *Client) CreatePet(ctx context.Context, name, species, personality string) (Pet, error) {
 	var p Pet
 	payload := fmt.Sprintf(`{"name":%s,"species":%s,"personality":%s}`,
@@ -98,6 +109,22 @@ func (c *Client) CreatePet(ctx context.Context, name, species, personality strin
 		return p, err
 	}
 	return p, nil
+}
+
+// BirthPet 启动 MetaAgent 分阶段诞生；立即返回 incubating，进度经 SSE genesis.* 推送。
+// personality 非空时走 template 模式，否则 random。
+func (c *Client) BirthPet(ctx context.Context, name, species, personality string) (BirthResult, error) {
+	var res BirthResult
+	mode := "random"
+	if strings.TrimSpace(personality) != "" {
+		mode = "template"
+	}
+	payload := fmt.Sprintf(`{"name":%s,"species":%s,"mode":%s,"personality":%s}`,
+		jsonString(name), jsonString(species), jsonString(mode), jsonString(personality))
+	if err := c.do(ctx, http.MethodPost, "/v1/pets/birth", payload, &res); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 // GetPet 读取一只宠物的最新状态（服务端会先补算）。

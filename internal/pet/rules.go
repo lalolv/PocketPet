@@ -61,6 +61,10 @@ var (
 	ErrNotSleeping = errors.New("pet is not sleeping")
 	// ErrLowEnergy 表示精力不足以玩耍。
 	ErrLowEnergy = errors.New("not enough energy to play")
+	// ErrIncubating 表示宠物仍在 MetaAgent 孵化中，尚不可照顾/对话。
+	ErrIncubating = errors.New("pet is still incubating")
+	// ErrNotIncubating 表示对非孵化状态宠物执行 finalize。
+	ErrNotIncubating = errors.New("pet is not incubating")
 )
 
 // Action 是一个照顾动作。
@@ -77,8 +81,13 @@ const (
 
 // Tick 按 now 与 LastTickAt 的时间差结算一次衰减（离线补算同样走这里），
 // 补算时长被 maxElapsed 截断（<=0 表示不截断），防止久未开机直接饿死。
-// 返回本次结算产生的领域事件。死亡或时钟回拨时不产生任何效果。
+// 使用中性特质（倍率 1）；有 SOUL 特质时请用 TickTraits。
 func (p *Pet) Tick(now time.Time, maxElapsed time.Duration) []Event {
+	return p.TickTraits(now, maxElapsed, NeutralTraits())
+}
+
+// TickTraits 与 Tick 相同，但按 traits 修饰衰减速率。
+func (p *Pet) TickTraits(now time.Time, maxElapsed time.Duration, traits Traits) []Event {
 	if !p.Alive || !now.After(p.LastTickAt) {
 		return nil
 	}
@@ -89,18 +98,14 @@ func (p *Pet) Tick(now time.Time, maxElapsed time.Duration) []Event {
 	p.LastTickAt = now
 
 	h := elapsed.Hours()
-	// 睡眠中 Hunger/Happy/Clean 衰减减半，Energy 转为恢复。
-	decay := 1.0
+	rates := ratesFor(traits, p.Sleeping)
+	p.Stats.Hunger -= rates.hunger * h
+	p.Stats.Happy -= rates.happy * h
+	p.Stats.Clean -= rates.clean * h
 	if p.Sleeping {
-		decay = sleepDecayFactor
-	}
-	p.Stats.Hunger -= hungerDecayPerHour * decay * h
-	p.Stats.Happy -= happyDecayPerHour * decay * h
-	p.Stats.Clean -= cleanDecayPerHour * decay * h
-	if p.Sleeping {
-		p.Stats.Energy += energySleepGainPerHour * h
+		p.Stats.Energy += rates.energySleep * h
 	} else {
-		p.Stats.Energy -= energyAwakeDrainPerHour * h
+		p.Stats.Energy -= rates.energyAwake * h
 	}
 
 	// 健康结算分两段估算（按线性速率回推各属性处于阈值以下的时长）：
@@ -109,10 +114,10 @@ func (p *Pet) Tick(now time.Time, maxElapsed time.Duration) []Event {
 	//    不会直接被扣死；
 	// 2) 恢复："四项属性均不低于 AlertWarn"的时间段内缓慢回血，
 	//    让生病在恢复正常照顾后可逆。
-	if d := p.lowDuration(h, AlertCritical); d > 0 {
+	if d := p.lowDuration(h, AlertCritical, rates); d > 0 {
 		p.Stats.Health -= healthDrainPerHour * d
 	}
-	if d := p.lowDuration(h, AlertWarn); d < h {
+	if d := p.lowDuration(h, AlertWarn, rates); d < h {
 		p.Stats.Health += healthRegenPerHour * (h - d)
 	}
 
@@ -123,20 +128,16 @@ func (p *Pet) Tick(now time.Time, maxElapsed time.Duration) []Event {
 // lowDuration 估算在本次结算的 h 小时内，任一属性处于 threshold 以下的
 // 最长时长（小时）。调用时各属性已应用本段衰减但尚未钳制，
 // 函数按速率回推结算前的值进行估算。
-func (p *Pet) lowDuration(h, threshold float64) float64 {
+func (p *Pet) lowDuration(h, threshold float64, rates decayRates) float64 {
 	longest := 0.0
-	decay := 1.0
-	if p.Sleeping {
-		decay = sleepDecayFactor
-	}
 	// 持续下降的属性：after 为结算后值，rate 为每小时下降量。
 	down := []struct{ after, rate float64 }{
-		{p.Stats.Hunger, hungerDecayPerHour * decay},
-		{p.Stats.Happy, happyDecayPerHour * decay},
-		{p.Stats.Clean, cleanDecayPerHour * decay},
+		{p.Stats.Hunger, rates.hunger},
+		{p.Stats.Happy, rates.happy},
+		{p.Stats.Clean, rates.clean},
 	}
 	if !p.Sleeping {
-		down = append(down, struct{ after, rate float64 }{p.Stats.Energy, energyAwakeDrainPerHour})
+		down = append(down, struct{ after, rate float64 }{p.Stats.Energy, rates.energyAwake})
 	}
 	for _, r := range down {
 		before := r.after + r.rate*h
@@ -153,8 +154,8 @@ func (p *Pet) lowDuration(h, threshold float64) float64 {
 	}
 	// 睡眠中精力在恢复：若结算前精力低于阈值，恢复到阈值之前仍在阈值以下。
 	if p.Sleeping {
-		if beforeE := p.Stats.Energy - energySleepGainPerHour*h; beforeE < threshold {
-			t := (threshold - beforeE) / energySleepGainPerHour
+		if beforeE := p.Stats.Energy - rates.energySleep*h; beforeE < threshold {
+			t := (threshold - beforeE) / rates.energySleep
 			if t > h {
 				t = h
 			}
@@ -167,29 +168,36 @@ func (p *Pet) lowDuration(h, threshold float64) float64 {
 }
 
 // Care 执行一个照顾动作，返回产生的事件（含动作事件、边沿告警与晋升）。
-// 非法动作或状态不允许时返回领域错误，状态不变。
+// 非法动作或状态不允许时返回领域错误，状态不变。使用中性特质。
 func (p *Pet) Care(action Action, now time.Time) ([]Event, error) {
+	return p.CareTraits(action, now, NeutralTraits())
+}
+
+// CareTraits 与 Care 相同，但按 traits 修饰喂食/玩耍等数值效果。
+func (p *Pet) CareTraits(action Action, now time.Time, traits Traits) ([]Event, error) {
 	if !p.Alive {
 		return nil, ErrDead
 	}
+	traits = traits.Clamped()
 	var actionEvs []Event
 	switch action {
 	case ActionFeed:
 		if p.Sleeping {
 			return nil, ErrSleeping
 		}
-		p.Stats.Hunger += feedHungerGain
+		p.Stats.Hunger += feedHungerGain * mult(traits.Appetite, ampAppetiteFeed)
 		p.Stats.Clean -= feedCleanCost
 		p.Stats.EXP += feedEXP
 	case ActionPlay:
 		if p.Sleeping {
 			return nil, ErrSleeping
 		}
-		if p.Stats.Energy < playEnergyCost {
+		energyCost := playEnergyCost * mult(traits.Playfulness, ampPlayEnergy)
+		if p.Stats.Energy < energyCost {
 			return nil, ErrLowEnergy
 		}
-		p.Stats.Happy += playHappyGain
-		p.Stats.Energy -= playEnergyCost
+		p.Stats.Happy += playHappyGain * mult(traits.Playfulness, ampPlayHappy)
+		p.Stats.Energy -= energyCost
 		p.Stats.Hunger -= playHungerCost
 		p.Stats.EXP += playEXP
 	case ActionClean:

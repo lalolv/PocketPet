@@ -107,13 +107,13 @@ func TestSmokeScript(t *testing.T) {
 		t.Fatalf("sleep frame should have closed eyes and z:\n%s", v)
 	}
 
-	// 推时钟两段 24h（睡眠中衰减减半：饱食 100 → 64 → 28，跌破预警线）→
-	// 拉状态触发结算 → SSE pet.hungry 到日志。离线补算上限 24h/次，故分两段推进。
+	// 推时钟两段 24h（睡眠中衰减减半；傲娇 appetite=0.7 → 饥饿衰减 ×1.1）：
+	// 饱食 100 → 60 → 21，第二段落破预警线。离线补算上限 24h/次，故分两段推进。
 	ts.clock.Advance(24 * time.Hour)
 	execCmd(getPetCmd(client, created.ID))
 	waitFor(t, inbox, func(msg tea.Msg) bool {
 		drive(msg)
-		return m.pet.Stats.Hunger == 64
+		return m.pet.Stats.Hunger == 60
 	}, "first offline settle")
 	ts.clock.Advance(24 * time.Hour)
 	execCmd(getPetCmd(client, created.ID))
@@ -126,7 +126,7 @@ func TestSmokeScript(t *testing.T) {
 			}
 		}
 		// 等事件与状态回写都到位（事件与 petMsg 顺序不定）。
-		return hasHungry && m.pet.Stats.Hunger == 28
+		return hasHungry && m.pet.Stats.Hunger == 21
 	}, "hungry event in logs")
 	// 状态同步：饱食掉到 10，装饰出现。
 	if v := m.renderString(); !strings.Contains(v, "流口水") {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -97,18 +98,27 @@ func PersonalityKeys() []string {
 // petMD 生成 PET.md（身份卡：frontmatter 关键字段 + 一段正文）。
 // 阶段只放 frontmatter（UpdateStage 的唯一更新点），正文不提阶段以免过期。
 func petMD(iden Identity) string {
-	return fmt.Sprintf(`---
-name: %s
-species: %s
-master: %s
-born_at: "%s"
-stage: %s
----
-我是%s，一只 %s，%s出生。我管我的主人叫「%s」。
-`,
-		iden.Name, iden.Species, iden.Master,
-		iden.BornAt.UTC().Format(time.RFC3339), iden.Stage,
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "name: %s\n", iden.Name)
+	fmt.Fprintf(&b, "species: %s\n", iden.Species)
+	fmt.Fprintf(&b, "master: %s\n", iden.Master)
+	fmt.Fprintf(&b, "born_at: \"%s\"\n", iden.BornAt.UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "stage: %s\n", iden.Stage)
+	if iden.Seed != "" {
+		fmt.Fprintf(&b, "seed: %s\n", iden.Seed)
+	}
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "我是%s，一只 %s，%s出生。我管我的主人叫「%s」。\n",
 		iden.Name, iden.Species, iden.BornAt.Format("2006年01月02日"), iden.Master)
+	if app := strings.TrimSpace(iden.Appearance); app != "" {
+		b.WriteString("\n")
+		b.WriteString(app)
+		if !strings.HasSuffix(app, "\n") {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // instructionsMD 生成 INSTRUCTIONS.md（行为准则：第一人称、不报数值、遵守边界）。

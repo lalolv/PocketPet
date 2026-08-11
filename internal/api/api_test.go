@@ -19,6 +19,7 @@ import (
 
 	"github.com/lalolv/PocketPet/internal/agent"
 	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/metaagent"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/store"
@@ -45,7 +46,11 @@ func setup(t *testing.T) *testEnv {
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
 	ag := agent.New(engine, fs, llm.Config{})
-	srv := httptest.NewServer(NewServer(st, engine, hub, fs, ag).Handler())
+	midwife := &metaagent.Midwife{
+		Engine: engine, FS: fs, Emit: engine.Emit, Sync: true, ForceScript: true,
+		Now: func() time.Time { return clock.Now() },
+	}
+	srv := httptest.NewServer(NewServer(st, engine, hub, fs, ag, midwife).Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, clock: clock}
 }
@@ -139,6 +144,37 @@ func TestCreateCareGetFlow(t *testing.T) {
 	}
 	if pets, _ := body["pets"].([]any); len(pets) != 1 {
 		t.Fatalf("list = %v", body)
+	}
+}
+
+func TestBirthPetFlow(t *testing.T) {
+	env := setup(t)
+	status, body := doJSON(t, "POST", env.srv.URL+"/v1/pets/birth",
+		`{"name":"团团","species":"cat","mode":"random","seed":"api-seed-1"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("birth status = %d, body = %v", status, body)
+	}
+	id, _ := body["id"].(string)
+	if id == "" || body["seed"] != "api-seed-1" {
+		t.Fatalf("birth body = %v", body)
+	}
+
+	// Sync midwife：创建返回后已 ready，可对话与读 soul
+	status, body = doJSON(t, "GET", env.srv.URL+"/v1/pets/"+id, "")
+	if status != http.StatusOK {
+		t.Fatalf("get status = %d", status)
+	}
+	if body["genesis_status"] != "ready" || body["name"] != "团团" {
+		t.Fatalf("pet = %v", body)
+	}
+
+	status, body = doJSON(t, "GET", env.srv.URL+"/v1/pets/"+id+"/soul", "")
+	if status != http.StatusOK {
+		t.Fatalf("soul status = %d, body = %v", status, body)
+	}
+	content, _ := body["content"].(string)
+	if !strings.Contains(content, "template: genesis") || !strings.Contains(content, "traits:") {
+		t.Fatalf("soul content unexpected:\n%s", content)
 	}
 }
 
@@ -487,7 +523,7 @@ func setupOpts(t *testing.T, opts agent.Options) *testEnv {
 	fs := petfs.New(filepath.Join(t.TempDir(), "data"))
 	engine := tick.NewEngine(st, tick.MultiSink{hub, agent.NewStageSync(fs, st)}, time.Minute, 24*time.Hour, clock)
 	ag := agent.New(engine, fs, llm.Config{}, opts)
-	srv := httptest.NewServer(NewServer(st, engine, hub, fs, ag).Handler())
+	srv := httptest.NewServer(NewServer(st, engine, hub, fs, ag, nil).Handler())
 	t.Cleanup(srv.Close)
 	return &testEnv{srv: srv, clock: clock}
 }

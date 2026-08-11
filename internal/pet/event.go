@@ -24,6 +24,20 @@ const (
 	EventDream        = "pet.dream"         // 梦境独白（message 为第一人称梦境文本）
 	EventSkillLearned = "pet.skill_learned" // 经验沉淀为技能
 	EventSoulChanged  = "pet.soul_changed"  // SOUL.md 被演化改写
+
+	// 以下事件由 MetaAgent 诞生流程（internal/metaagent）产生；
+	// Message 为该阶段结构化 JSON 载荷（见 docs/04-MetaAgent宠物诞生设计.md）。
+	EventGenesisStarted     = "genesis.started"
+	EventGenesisNarration   = "genesis.narration"
+	EventGenesisGenes       = "genesis.genes"
+	EventGenesisTemperament = "genesis.temperament"
+	EventGenesisAppearance  = "genesis.appearance"
+	EventGenesisQuirks      = "genesis.quirks"
+	EventGenesisSoul        = "genesis.soul"
+	EventGenesisStats       = "genesis.stats"
+	EventGenesisIdentity    = "genesis.identity"
+	EventGenesisReady       = "genesis.ready"
+	EventGenesisFailed      = "genesis.failed"
 )
 
 // Event 是一条领域事件。ID 由存储层写入 pet_events 表后回填。

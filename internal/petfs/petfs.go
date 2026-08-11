@@ -21,6 +21,7 @@ const (
 	FileInstructions = "INSTRUCTIONS.md" // 行为准则
 	FileAgent        = "AGENT.md"        // 装配声明（provider/model）
 	FileMemory       = "MEMORY.md"       // 长期记忆
+	FileGenesis      = ".genesis.json"   // MetaAgent 孵化草稿（finalize 后删除）
 	DirMemory        = "memory"          // 日记目录（YYYY-MM-DD.md）
 	DirSkills        = "skills"          // 技能目录（M4 预留）
 )
@@ -94,18 +95,33 @@ func (fs *FS) Exists(id string) bool {
 type Identity struct {
 	Name        string    // 名字
 	Species     string    // 物种
-	Personality string    // 性格模板名（键或中文名），空 = 随机
+	Personality string    // 性格模板名（键或中文名），空 = 随机；CustomSoul 非空时忽略
 	Master      string    // 对主人的称呼，空 = "主人"
 	Stage       string    // 初始成长阶段，空 = "egg"
 	BornAt      time.Time // 生日
+	Seed        string    // 基因种子（可选，写入 PET.md frontmatter）
+	Appearance  string    // 外貌描述（可选，追加到 PET.md 正文）
+	CustomSoul  string    // 非空时直接作为 SOUL.md，不再用性格模板正文
+	SoulLabel   string    // CustomSoul 时的气质标签（写入 Personality.Label）
+	SoulKey     string    // CustomSoul 时的模板键（空 = "genesis"）
 }
 
 // CreatePet 为宠物创建整套模板文件，返回实际使用的性格模板。
 // 目录已存在（PET.md 已生成）时返回 ErrExists，不会覆盖已有文件。
 func (fs *FS) CreatePet(id string, iden Identity) (Personality, error) {
-	per, err := ResolvePersonality(iden.Personality)
-	if err != nil {
-		return Personality{}, err
+	var per Personality
+	var err error
+	if iden.CustomSoul != "" {
+		key := iden.SoulKey
+		if key == "" {
+			key = "genesis"
+		}
+		per = Personality{Key: key, Label: iden.SoulLabel, Soul: iden.CustomSoul}
+	} else {
+		per, err = ResolvePersonality(iden.Personality)
+		if err != nil {
+			return Personality{}, err
+		}
 	}
 	if iden.Master == "" {
 		iden.Master = "主人"
@@ -311,6 +327,54 @@ func (fs *FS) ReadJournal(id, name string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// EnsurePetDir 确保宠物目录存在（孵化草稿写入前调用；不创建 PET.md）。
+func (fs *FS) EnsurePetDir(id string) error {
+	unlock, err := fs.lock(id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return os.MkdirAll(fs.PetDir(id), 0o755)
+}
+
+// SaveGenesisDraft 写入 MetaAgent 孵化草稿（.genesis.json）。
+func (fs *FS) SaveGenesisDraft(id string, raw []byte) error {
+	unlock, err := fs.lock(id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	dir := fs.PetDir(id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, FileGenesis), raw, 0o644)
+}
+
+// LoadGenesisDraft 读取孵化草稿；不存在时返回 os.ErrNotExist。
+func (fs *FS) LoadGenesisDraft(id string) ([]byte, error) {
+	unlock, err := fs.lock(id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return os.ReadFile(filepath.Join(fs.PetDir(id), FileGenesis))
+}
+
+// RemoveGenesisDraft 删除孵化草稿（finalize 成功后调用）；不存在不算错。
+func (fs *FS) RemoveGenesisDraft(id string) error {
+	unlock, err := fs.lock(id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = os.Remove(filepath.Join(fs.PetDir(id), FileGenesis))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // splitFrontmatter 把 "---\n<fm>\n---\n<body>" 拆成 frontmatter 各行与正文。

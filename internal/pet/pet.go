@@ -63,6 +63,12 @@ type AlertState struct {
 	Sad    bool `json:"sad"`
 }
 
+// 诞生（genesis）状态：由 MetaAgent 孵化流程写入。
+const (
+	GenesisIncubating = "incubating" // 蛋中，尚未 finalize
+	GenesisReady      = "ready"      // 已诞生，可对话
+)
+
 // Pet 是一只宠物的完整数值状态（存储层以此为 JSON 快照持久化）。
 type Pet struct {
 	ID      string     `json:"id"`
@@ -75,29 +81,60 @@ type Pet struct {
 	Sleeping bool `json:"sleeping"` // 睡眠中精力恢复，且不可 feed/play
 	Alive    bool `json:"alive"`    // Health 归零后死亡，此后 tick 与动作均不生效
 
+	// GenesisStatus 是 MetaAgent 孵化状态。空字符串视为 ready（兼容旧宠物）。
+	GenesisStatus string `json:"genesis_status,omitempty"`
+
 	BornAt     time.Time `json:"born_at"`
 	LastTickAt time.Time `json:"last_tick_at"` // 上次衰减结算时刻，离线补算的基准
+}
+
+// Incubating 报告宠物是否仍在 MetaAgent 孵化中。
+func (p *Pet) Incubating() bool {
+	return p != nil && p.GenesisStatus == GenesisIncubating
+}
+
+// DefaultStats 是即时创建（非 MetaAgent）时的默认初始属性。
+func DefaultStats() Stats {
+	return Stats{
+		Hunger: 70,
+		Happy:  80,
+		Clean:  80,
+		Energy: 100,
+		Health: 100,
+	}
 }
 
 // New 创建一只新生宠物（蛋阶段）。
 // 初始属性取"略低于满值、需要主人照顾但不紧急"的合理水平。
 func New(id, name, species string, now time.Time) *Pet {
-	return &Pet{
-		ID:      id,
-		Name:    name,
-		Species: species,
-		Stage:   StageEgg,
-		Stats: Stats{
-			Hunger: 70,
-			Happy:  80,
-			Clean:  80,
-			Energy: 100,
-			Health: 100,
-		},
+	return NewWithStats(id, name, species, DefaultStats(), now)
+}
+
+// NewWithStats 用指定初始属性创建宠物（Health 若为 0 则补为 100）。
+func NewWithStats(id, name, species string, stats Stats, now time.Time) *Pet {
+	if stats.Health <= 0 {
+		stats.Health = 100
+	}
+	p := &Pet{
+		ID:         id,
+		Name:       name,
+		Species:    species,
+		Stage:      StageEgg,
+		Stats:      stats,
 		Alive:      true,
 		BornAt:     now,
 		LastTickAt: now,
 	}
+	p.clamp()
+	return p
+}
+
+// ApplyBirthStats 在 finalize 时写入初始属性并钳制；Health 固定 100，EXP 归零。
+func (p *Pet) ApplyBirthStats(stats Stats) {
+	stats.Health = 100
+	stats.EXP = 0
+	p.Stats = stats
+	p.clamp()
 }
 
 // clamp 把各属性钳制到合法区间。

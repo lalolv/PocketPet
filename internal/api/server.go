@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lalolv/PocketPet/internal/agent"
+	"github.com/lalolv/PocketPet/internal/metaagent"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/store"
@@ -22,24 +23,26 @@ const sseReplayCount = 20
 
 // Server 是 HTTP API 服务。
 type Server struct {
-	store  *store.Store
-	engine *tick.Engine
-	hub    *Hub
-	fs     *petfs.FS
-	agent  *agent.PetAgent
-	mux    *http.ServeMux
+	store   *store.Store
+	engine  *tick.Engine
+	hub     *Hub
+	fs      *petfs.FS
+	agent   *agent.PetAgent
+	midwife *metaagent.Midwife
+	mux     *http.ServeMux
 
 	a2aMu       sync.Mutex
 	a2aHandlers map[string]*a2aEntry // petID → A2A 协议 handler（按 agent 实例缓存）
 }
 
-// NewServer 装配路由。
-func NewServer(st *store.Store, engine *tick.Engine, hub *Hub, fs *petfs.FS, ag *agent.PetAgent) *Server {
-	s := &Server{store: st, engine: engine, hub: hub, fs: fs, agent: ag,
+// NewServer 装配路由。midwife 可为 nil（禁用 /v1/pets/birth）。
+func NewServer(st *store.Store, engine *tick.Engine, hub *Hub, fs *petfs.FS, ag *agent.PetAgent, midwife *metaagent.Midwife) *Server {
+	s := &Server{store: st, engine: engine, hub: hub, fs: fs, agent: ag, midwife: midwife,
 		mux: http.NewServeMux(), a2aHandlers: make(map[string]*a2aEntry)}
 	// 状态快照推送：结算/动作落库后经 hub 广播 SSE state 帧。
 	engine.SetStateSink(stateSink{hub})
 	s.mux.HandleFunc("POST /v1/pets", s.handleCreatePet)
+	s.mux.HandleFunc("POST /v1/pets/birth", s.handleBirthPet)
 	s.mux.HandleFunc("GET /v1/pets", s.handleListPets)
 	s.mux.HandleFunc("GET /v1/pets/{id}", s.handleGetPet)
 	s.mux.HandleFunc("POST /v1/pets/{id}/care", s.handleCare)
@@ -80,6 +83,8 @@ type petView struct {
 	LastTickAt time.Time `json:"last_tick_at"`
 	// Personality 是性格模板键（M2）。仅在创建/单只查询时附带，列表为空。
 	Personality string `json:"personality,omitempty"`
+	// GenesisStatus 是 MetaAgent 孵化状态：incubating | ready。
+	GenesisStatus string `json:"genesis_status,omitempty"`
 }
 
 // stateView 是 SSE state 帧的载荷：随时间变化的字段快照（每 tick/动作后推送）。
@@ -116,11 +121,16 @@ type stateSink struct{ hub *Hub }
 func (s stateSink) PublishState(p *pet.Pet) { s.hub.PublishState(stateOf(p)) }
 
 func view(p *pet.Pet) petView {
+	gs := p.GenesisStatus
+	if gs == "" {
+		gs = pet.GenesisReady
+	}
 	return petView{
 		ID: p.ID, Name: p.Name, Species: p.Species, Stage: p.Stage,
 		Sleeping: p.Sleeping, Alive: p.Alive,
 		Stats:  statsViewOf(p),
 		BornAt: p.BornAt, LastTickAt: p.LastTickAt,
+		GenesisStatus: gs,
 	}
 }
 
@@ -178,6 +188,39 @@ func (s *Server) handleCreatePet(w http.ResponseWriter, r *http.Request) {
 	v := view(p)
 	v.Personality = per.Key
 	writeJSON(w, http.StatusCreated, v)
+}
+
+type birthPetRequest struct {
+	Name        string `json:"name"`
+	Species     string `json:"species"`
+	Mode        string `json:"mode"`
+	Personality string `json:"personality"`
+	Prompt      string `json:"prompt"`
+	Seed        string `json:"seed"`
+	Master      string `json:"master"`
+}
+
+// handleBirthPet 启动 MetaAgent 分阶段诞生（G1：脚本跑通阶段 + SSE genesis.*）。
+func (s *Server) handleBirthPet(w http.ResponseWriter, r *http.Request) {
+	if s.midwife == nil {
+		writeError(w, http.StatusServiceUnavailable, codeInternal, "birth service unavailable")
+		return
+	}
+	var req birthPetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "invalid JSON body")
+		return
+	}
+	res, err := s.midwife.Start(r.Context(), metaagent.Request{
+		Name: req.Name, Species: req.Species, Mode: req.Mode,
+		Personality: req.Personality, Prompt: req.Prompt,
+		Seed: req.Seed, Master: req.Master,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
 }
 
 func (s *Server) handleListPets(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +357,15 @@ type chatRequest struct {
 // LLM 不可用时 PetAgent 内部走降级文案，本端点始终返回 200 + reply。
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	p, err := s.store.GetPet(r.Context(), id)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	if p.Incubating() {
+		writeDomainError(w, pet.ErrIncubating)
+		return
+	}
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, "invalid JSON body")

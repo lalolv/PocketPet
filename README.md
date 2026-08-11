@@ -46,7 +46,12 @@ go install github.com/lalolv/PocketPet/cmd/pocketpet-tui@latest
 ### 通过 API 互动
 
 ```bash
-# 创建一只宠物（personality 可选：性格模板名，空 = 随机）
+# MetaAgent 分阶段诞生（已配置 LLM 时走造物主 Agent；否则脚本降级）
+curl -X POST localhost:8080/v1/pets/birth \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "小咪", "species": "cat", "mode": "random"}'
+
+# 即时创建（旧路径；personality 可选，空 = 随机模板）
 curl -X POST localhost:8080/v1/pets \
   -H 'Content-Type: application/json' \
   -d '{"name": "小咪", "species": "cat"}'
@@ -81,7 +86,8 @@ llm:
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/v1/pets` | 创建宠物 |
+| POST | `/v1/pets` | 创建宠物（即时模板路径） |
+| POST | `/v1/pets/birth` | MetaAgent 分阶段诞生（SSE `genesis.*`） |
 | GET | `/v1/pets` / `/v1/pets/{id}` | 列表 / 状态查询 |
 | POST | `/v1/pets/{id}/chat` | 和宠物对话（`?stream=true` SSE 流式） |
 | POST | `/v1/pets/{id}/care` | 照顾动作（feed / play / clean） |
@@ -119,6 +125,7 @@ llm:
 - [调研报告](docs/01-调研报告.md)
 - [技术选型评估](docs/02-技术选型评估.md)
 - [架构设计方案](docs/03-架构设计方案.md)
+- [MetaAgent 宠物诞生设计](docs/04-MetaAgent宠物诞生设计.md)
 
 ## License
 

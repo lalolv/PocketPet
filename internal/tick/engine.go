@@ -41,7 +41,8 @@ func (m MultiSink) Publish(e pet.Event) {
 }
 
 // TickHook 在每个 tick 周期结算全部宠物后被调用（插件扩展点，M5）。
-// 实现方应快速返回，耗时操作请自行异步化。
+// 实现方应快速返回（建议 <100ms）；耗时操作请自行异步化或分批，
+// 否则会拉长全局 tick（Registry 会对慢钩子打 Warn）。
 type TickHook interface {
 	OnTick(ctx context.Context, now time.Time)
 }

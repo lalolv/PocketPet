@@ -78,9 +78,55 @@ type Config struct {
 	// Genesis 是 MetaAgent 诞生流程配置（yaml genesis 段）。
 	Genesis GenesisConfig
 
+	// Plugins 是内置 Go 插件的开关与参数（yaml plugins 段）。
+	// 段缺失时各插件默认启用、使用代码内默认数值。
+	Plugins PluginsConfig
+
 	// ConfigPath 是实际使用的配置文件路径（纯 env 模式为空）。
 	ConfigPath string
 }
+
+// PluginsConfig 是内置玩法插件的 YAML 配置。
+type PluginsConfig struct {
+	Adventure AdventurePluginConfig `yaml:"adventure"`
+	Friends   FriendsPluginConfig   `yaml:"friends"`
+}
+
+// AdventurePluginConfig 是探险插件的开关与数值覆盖。
+type AdventurePluginConfig struct {
+	Enabled      *bool    `yaml:"enabled"`
+	Ticks        *int     `yaml:"ticks"`
+	EnergyCost   *float64 `yaml:"energy_cost"`
+	EXPReward    *int     `yaml:"exp_reward"`
+	HappyReward  *float64 `yaml:"happy_reward"`
+	InjuryChance *float64 `yaml:"injury_chance"`
+	InjuryHealth *float64 `yaml:"injury_health"`
+}
+
+// FriendsPluginConfig 是交友插件的开关与数值覆盖。
+type FriendsPluginConfig struct {
+	Enabled             *bool    `yaml:"enabled"`
+	VisitAffinity       *float64 `yaml:"visit_affinity"`
+	VisitHappy          *float64 `yaml:"visit_happy"`
+	PeekAffinity        *float64 `yaml:"peek_affinity"`
+	GiftAffinity        *float64 `yaml:"gift_affinity"`
+	GiftHappy           *float64 `yaml:"gift_happy"`
+	AdventureAffinity   *float64 `yaml:"adventure_affinity"` // 好友探险归来时的好感增量
+}
+
+// pluginEnabled 解析 *bool 开关：nil = 默认启用。
+func pluginEnabled(v *bool) bool {
+	if v == nil {
+		return true
+	}
+	return *v
+}
+
+// AdventureEnabled 报告探险插件是否启用。
+func (c Config) AdventureEnabled() bool { return pluginEnabled(c.Plugins.Adventure.Enabled) }
+
+// FriendsEnabled 报告交友插件是否启用。
+func (c Config) FriendsEnabled() bool { return pluginEnabled(c.Plugins.Friends.Enabled) }
 
 // GenesisConfig 是 MetaAgent 诞生（internal/metaagent）的运行参数。
 type GenesisConfig struct {
@@ -149,6 +195,7 @@ type fileConfig struct {
 		ScriptPaceMS   *int   `yaml:"script_pace_ms"` // 指针：区分未配置与显式 0
 		LegacyCreate   string `yaml:"legacy_create"`  // instant | birth
 	} `yaml:"genesis"`
+	Plugins PluginsConfig `yaml:"plugins"`
 }
 
 // Load 加载配置：flagPath 为 -config 启动参数（空则按规则探测）。
@@ -274,6 +321,7 @@ func (cfg *Config) applyFile(path string) error {
 		BaseURL: fc.LLM.BaseURL,
 		APIKey:  fc.LLM.APIKey,
 	}
+	cfg.Plugins = fc.Plugins
 	return nil
 }
 

@@ -22,8 +22,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/plugin"
-	"github.com/lalolv/PocketPet/internal/plugins/adventure"
-	"github.com/lalolv/PocketPet/internal/plugins/friends"
+	"github.com/lalolv/PocketPet/internal/plugins"
 	"github.com/lalolv/PocketPet/internal/proactive"
 	"github.com/lalolv/PocketPet/internal/store"
 	"github.com/lalolv/PocketPet/internal/tick"
@@ -67,9 +66,8 @@ func main() {
 	pfs := petfs.New(cfg.DataRoot)
 	hub := api.NewHub()
 
-	// M5 插件体系：先建注册表并跑迁移（实例构造不依赖 engine），
-	// 事件订阅者随后并入 engine 的事件扇出。
-	registry := plugin.NewRegistry(adventure.New(), friends.New())
+	// M5 插件体系：内置插件由 internal/plugins.Build 按 YAML 过滤/调参后注册。
+	registry := plugin.NewRegistry(plugins.Build(cfg)...)
 	if err := registry.RunMigrations(st); err != nil {
 		slog.Error("plugin migrations failed", "err", err)
 		os.Exit(1)
@@ -100,7 +98,7 @@ func main() {
 	monitor.Emitter = engine.Emit
 
 	// 插件 Init（受控上下文）→ tick 钩子 → 工具 → 路由。
-	if err := registry.InitAll(plugin.NewPluginContext(engine, pfs, st.DB(), slog.Default())); err != nil {
+	if err := registry.InitAll(plugin.NewPluginContext(engine, pfs, st.DB(), slog.Default(), registry)); err != nil {
 		slog.Error("plugin init failed", "err", err)
 		os.Exit(1)
 	}
@@ -131,6 +129,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	registry.SetEventContext(ctx)
 
 	go engine.Run(ctx)
 
@@ -146,6 +145,9 @@ func main() {
 		defer cancel()
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 			slog.Error("http shutdown failed", "err", err)
+		}
+		if err := registry.ShutdownAll(shutdownCtx); err != nil {
+			slog.Error("plugin shutdown failed", "err", err)
 		}
 	}()
 

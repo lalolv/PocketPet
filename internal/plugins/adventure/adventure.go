@@ -1,6 +1,7 @@
 // Package adventure 是"探险"玩法插件（设计文档 8.3 的回测案例，M5 验证）：
-// 纯插件实现，不改主程序——工具经 ToolProvider 注入，结算走 TickHook，
+// 纯插件实现，不改 tick/store/pet 领域层——工具经 ToolProvider 注入，结算走 TickHook，
 // 背包是自己的 SQLite 表（SchemaProvider），背包查询走 RouteProvider。
+// 仍需在 composition root 注册并重编译。
 //
 // 数值规则（确定性，写死在代码里）：
 //   - adventure_start：需清醒且 Energy >= 15，消耗 Energy -15，进入探险（默认 3 个 tick）
@@ -143,6 +144,9 @@ func (a *Adventure) Init(ctx plugin.PluginContext) error {
 	a.tools = []adktool.Tool{start, status}
 	return nil
 }
+
+// Shutdown 实现 plugin.Shutdowner（当前无资源，占位对称）。
+func (a *Adventure) Shutdown(context.Context) error { return nil }
 
 // Tools 实现 plugin.ToolProvider。
 func (a *Adventure) Tools() []adktool.Tool { return a.tools }

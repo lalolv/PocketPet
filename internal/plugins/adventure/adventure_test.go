@@ -69,7 +69,7 @@ func setup(t *testing.T) *testEnv {
 	if err := st.RunPluginMigrations(adv.Name(), adv.Migrations()); err != nil {
 		t.Fatal(err)
 	}
-	if err := adv.Init(plugin.NewPluginContext(engine, fs, st.DB(), slog.Default())); err != nil {
+	if err := adv.Init(plugin.NewPluginContext(engine, fs, st.DB(), slog.Default(), nil)); err != nil {
 		t.Fatal(err)
 	}
 	engine.AddTickHook(adv)

@@ -117,7 +117,7 @@ llm:
 │   ├── petfs/           # 宠物文件系统（PET/SOUL/MEMORY/skills）
 │   ├── tick/            # tick 引擎：衰减、离线结算
 │   ├── plugin/          # Go 插件契约与注册表
-│   ├── plugins/         # 内置插件（探险 / 交友）
+│   ├── plugins/         # 内置插件聚合 Build + 实现（探险 / 交友）
 │   └── tui/             # TUI 客户端实现
 ├── skills/              # 全局技能包
 ├── configs/             # 配置示例
@@ -130,6 +130,7 @@ llm:
 - [技术选型评估](docs/02-技术选型评估.md)
 - [架构设计方案](docs/03-架构设计方案.md)
 - [MetaAgent 宠物诞生设计](docs/04-MetaAgent宠物诞生设计.md)
+- [插件开发指南](docs/05-插件开发指南.md)（新增玩法 / vibe coding 步骤）
 
 ## License
 

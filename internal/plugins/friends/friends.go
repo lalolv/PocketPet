@@ -1,13 +1,18 @@
 // Package friends 是"同实例交友"玩法插件（M5 验证跨宠物访问）：
 // 好感度存自己的 SQLite 表（SchemaProvider），工具经 ToolProvider 注入，
-// 好感度查询走 RouteProvider。跨实例交友走 A2A（M4 已就位），不在本插件范围。
+// 好感度查询走 RouteProvider；订阅 adventure 完成事件（EventSubscriber）与好友分享见闻。
+// 跨实例交友走 A2A（M4 已就位），不在本插件范围。
 //
 // 数值规则（确定性，写死在代码里）：
 //   - visit_friend：双方 affinity +5、双方 Happy +8、互动数 +1；
 //     对方在睡觉则降级为"隔着门看了看"：仅双方 affinity +2、互动数 +1。
 //   - gift：从背包送 1 件物品给对方（走 adventure 插件的背包，未注册时报业务错误），
 //     双方 affinity +3、对方 Happy +5、互动数 +1。
+//   - 探险归来（pet.adventure_finished）：与已有好友各 +AdventureAffinity 好感，并给对方写日记。
 //   - 访问/送礼都会给对方写日记（它聊天时 recall 可达）并发领域事件。
+//
+// 对 adventure 是软依赖：Init 用 HasPlugin 检查并打日志；缺失时 gift 业务降级，
+// 不实现 Depender（硬依赖），以便 YAML 可单独关闭探险。
 package friends
 
 import (
@@ -37,34 +42,38 @@ const (
 
 // 默认数值参数。
 const (
-	defaultVisitAffinity = 5.0
-	defaultVisitHappy    = 8.0
-	defaultPeekAffinity  = 2.0 // 对方睡觉时的降级好感增量
-	defaultGiftAffinity  = 3.0
-	defaultGiftHappy     = 5.0
+	defaultVisitAffinity     = 5.0
+	defaultVisitHappy        = 8.0
+	defaultPeekAffinity      = 2.0 // 对方睡觉时的降级好感增量
+	defaultGiftAffinity      = 3.0
+	defaultGiftHappy         = 5.0
+	defaultAdventureAffinity = 1.0 // 好友探险归来时的好感增量
 )
 
 // Friends 是交友插件实例。数值字段在 Init 前可覆盖（测试/调参用）。
 type Friends struct {
-	VisitAffinity float64
-	VisitHappy    float64
-	PeekAffinity  float64
-	GiftAffinity  float64
-	GiftHappy     float64
+	VisitAffinity     float64
+	VisitHappy        float64
+	PeekAffinity      float64
+	GiftAffinity      float64
+	GiftHappy         float64
+	AdventureAffinity float64
 
-	ctx   plugin.PluginContext
-	db    *sql.DB
-	tools []adktool.Tool
+	ctx          plugin.PluginContext
+	db           *sql.DB
+	tools        []adktool.Tool
+	hasAdventure bool
 }
 
 // New 创建默认参数的交友插件。
 func New() *Friends {
 	return &Friends{
-		VisitAffinity: defaultVisitAffinity,
-		VisitHappy:    defaultVisitHappy,
-		PeekAffinity:  defaultPeekAffinity,
-		GiftAffinity:  defaultGiftAffinity,
-		GiftHappy:     defaultGiftHappy,
+		VisitAffinity:     defaultVisitAffinity,
+		VisitHappy:        defaultVisitHappy,
+		PeekAffinity:      defaultPeekAffinity,
+		GiftAffinity:      defaultGiftAffinity,
+		GiftHappy:         defaultGiftHappy,
+		AdventureAffinity: defaultAdventureAffinity,
 	}
 }
 
@@ -84,10 +93,14 @@ func (f *Friends) Migrations() []store.Migration {
 	}
 }
 
-// Init 实现 plugin.Plugin：构建工具。
+// Init 实现 plugin.Plugin：构建工具；软检查 adventure。
 func (f *Friends) Init(ctx plugin.PluginContext) error {
 	f.ctx = ctx
 	f.db = ctx.DB()
+	f.hasAdventure = ctx.HasPlugin("adventure")
+	if !f.hasAdventure {
+		ctx.Logger().Warn("friends: adventure plugin not registered; gift will report no inventory")
+	}
 
 	visit, err := functiontool.New(functiontool.Config{
 		Name:        "visit_friend",
@@ -110,6 +123,9 @@ func (f *Friends) Init(ctx plugin.PluginContext) error {
 	f.tools = []adktool.Tool{visit, gift}
 	return nil
 }
+
+// Shutdown 实现 plugin.Shutdowner（当前无资源，占位对称）。
+func (f *Friends) Shutdown(context.Context) error { return nil }
 
 // Tools 实现 plugin.ToolProvider。
 func (f *Friends) Tools() []adktool.Tool { return f.tools }
@@ -160,6 +176,9 @@ func (f *Friends) gift(ctx context.Context, petID, friendName, item string) (plu
 	if err != nil || res != nil {
 		return *res, err
 	}
+	if !f.hasAdventure {
+		return plugin.ToolResult{OK: false, Outcome: "我还没有背包呢……要先去探险才能有东西可送"}, nil
+	}
 
 	err = adventure.TakeItem(f.db, self.ID, item)
 	switch {
@@ -190,6 +209,46 @@ func (f *Friends) gift(ctx context.Context, petID, friendName, item string) (plu
 	return plugin.ToolResult{OK: true, Outcome: "我把【" + item + "】送给了 " + friend.Name + "，它看起来很开心"}, nil
 }
 
+// OnEvent 实现 plugin.EventSubscriber：好友探险归来时加深感情并写日记。
+// 只做 DB/文件写入，不重入 Engine（避免与 emit 持锁路径死锁）。
+func (f *Friends) OnEvent(ctx context.Context, e pet.Event) {
+	if e.Type != adventure.EventFinished || f.db == nil || f.AdventureAffinity == 0 {
+		return
+	}
+	rows, err := f.db.QueryContext(ctx,
+		`SELECT friend_id FROM friendships WHERE pet_id = ?`, e.PetID)
+	if err != nil {
+		return
+	}
+	var friendIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			friendIDs = append(friendIDs, id)
+		}
+	}
+	rows.Close()
+	if len(friendIDs) == 0 {
+		return
+	}
+
+	adventurerName := e.PetID
+	if p, err := f.ctx.GetPet(ctx, e.PetID); err == nil {
+		adventurerName = p.Name
+	}
+	now := time.Now()
+	msg := fmt.Sprintf("听说 %s 探险回来了，带回了新见闻", adventurerName)
+	for _, fid := range friendIDs {
+		if err := f.bumpAffinityOnly(ctx, e.PetID, fid, f.AdventureAffinity); err != nil {
+			f.ctx.Logger().Warn("friends: adventure affinity failed", "friend", fid, "err", err)
+			continue
+		}
+		if err := f.ctx.AppendJournal(fid, msg+"。", now); err != nil {
+			f.ctx.Logger().Warn("friends: append journal failed", "friend", fid, "err", err)
+		}
+	}
+}
+
 // resolveFriend 校验并找到双方宠物；返回非 nil 的 res 表示可直接返回的业务结果。
 func (f *Friends) resolveFriend(ctx context.Context, petID, friendName string) (self, friend *pet.Pet, res *plugin.ToolResult, err error) {
 	self, err = f.ctx.GetPet(ctx, petID)
@@ -213,13 +272,26 @@ func (f *Friends) resolveFriend(ctx context.Context, petID, friendName string) (
 
 // bumpAffinity 双向加好感并各记一次互动。
 func (f *Friends) bumpAffinity(ctx context.Context, a, b string, delta float64) error {
+	return f.bump(ctx, a, b, delta, true)
+}
+
+// bumpAffinityOnly 双向加好感，不增加互动计数（如探险见闻分享）。
+func (f *Friends) bumpAffinityOnly(ctx context.Context, a, b string, delta float64) error {
+	return f.bump(ctx, a, b, delta, false)
+}
+
+func (f *Friends) bump(ctx context.Context, a, b string, delta float64, countInteraction bool) error {
+	inc := 0
+	if countInteraction {
+		inc = 1
+	}
 	for _, pair := range [][2]string{{a, b}, {b, a}} {
 		if _, err := f.db.ExecContext(ctx,
-			`INSERT INTO friendships (pet_id, friend_id, affinity, interactions) VALUES (?, ?, ?, 1)
+			`INSERT INTO friendships (pet_id, friend_id, affinity, interactions) VALUES (?, ?, ?, ?)
 			 ON CONFLICT(pet_id, friend_id) DO UPDATE SET
 				affinity = affinity + excluded.affinity,
-				interactions = interactions + 1`,
-			pair[0], pair[1], delta); err != nil {
+				interactions = interactions + excluded.interactions`,
+			pair[0], pair[1], delta, inc); err != nil {
 			return err
 		}
 	}

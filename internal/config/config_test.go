@@ -207,3 +207,49 @@ genesis:
 		t.Fatalf("genesis env override = %+v", cfg.Genesis)
 	}
 }
+
+func TestPluginsConfig(t *testing.T) {
+	// 缺省：全部启用
+	path := writeYAML(t, "server:\n  listen: ':9999'\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AdventureEnabled() || !cfg.FriendsEnabled() {
+		t.Fatalf("plugins should default enabled: %+v", cfg.Plugins)
+	}
+
+	path = writeYAML(t, `
+plugins:
+  adventure:
+    enabled: false
+    ticks: 5
+    energy_cost: 20
+  friends:
+    enabled: true
+    visit_affinity: 7
+    adventure_affinity: 2
+`)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AdventureEnabled() {
+		t.Fatal("adventure should be disabled")
+	}
+	if !cfg.FriendsEnabled() {
+		t.Fatal("friends should stay enabled")
+	}
+	if cfg.Plugins.Adventure.Ticks == nil || *cfg.Plugins.Adventure.Ticks != 5 {
+		t.Fatalf("ticks = %+v", cfg.Plugins.Adventure.Ticks)
+	}
+	if cfg.Plugins.Adventure.EnergyCost == nil || *cfg.Plugins.Adventure.EnergyCost != 20 {
+		t.Fatalf("energy_cost = %+v", cfg.Plugins.Adventure.EnergyCost)
+	}
+	if cfg.Plugins.Friends.VisitAffinity == nil || *cfg.Plugins.Friends.VisitAffinity != 7 {
+		t.Fatalf("visit_affinity = %+v", cfg.Plugins.Friends.VisitAffinity)
+	}
+	if cfg.Plugins.Friends.AdventureAffinity == nil || *cfg.Plugins.Friends.AdventureAffinity != 2 {
+		t.Fatalf("adventure_affinity = %+v", cfg.Plugins.Friends.AdventureAffinity)
+	}
+}

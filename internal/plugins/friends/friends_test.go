@@ -64,16 +64,20 @@ func setup(t *testing.T, withAdv bool) *testEnv {
 	fs := petfs.New(t.TempDir())
 	fr := New()
 	engine := tick.NewEngine(st, sink, time.Minute, 24*time.Hour, clock)
+	var plugins []plugin.Plugin
 	if withAdv {
 		adv := adventure.New()
 		if err := st.RunPluginMigrations(adv.Name(), adv.Migrations()); err != nil {
 			t.Fatal(err)
 		}
+		plugins = append(plugins, adv)
 	}
 	if err := st.RunPluginMigrations(fr.Name(), fr.Migrations()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fr.Init(plugin.NewPluginContext(engine, fs, st.DB(), slog.Default())); err != nil {
+	plugins = append(plugins, fr)
+	reg := plugin.NewRegistry(plugins...)
+	if err := fr.Init(plugin.NewPluginContext(engine, fs, st.DB(), slog.Default(), reg)); err != nil {
 		t.Fatal(err)
 	}
 	return &testEnv{st: st, fs: fs, engine: engine, sink: sink, clock: clock, fr: fr, withAdv: withAdv}
@@ -273,5 +277,36 @@ func TestFriendsRoute(t *testing.T) {
 	first, _ := list[0].(map[string]any)
 	if first["name"] != "团子" || first["affinity"] != 5.0 || first["interactions"] != 1.0 {
 		t.Fatalf("friend entry = %v", first)
+	}
+}
+
+// TestAdventureFinishedSharesWithFriends 验证 EventSubscriber：探险归来加深好友感情并写日记。
+func TestAdventureFinishedSharesWithFriends(t *testing.T) {
+	env := setup(t, true)
+	a := env.newPet(t, "雪球")
+	b := env.newPet(t, "团子")
+	if _, err := env.fr.visit(context.Background(), a.ID, "团子"); err != nil {
+		t.Fatal(err)
+	}
+	before := env.affinity(t, a.ID, b.ID)
+
+	env.fr.OnEvent(context.Background(), pet.Event{
+		PetID: a.ID, Type: adventure.EventFinished, Message: "探险归来", CreatedAt: t0,
+	})
+
+	if v := env.affinity(t, a.ID, b.ID); v != before+1 {
+		t.Fatalf("affinity after adventure = %v, want %v", v, before+1)
+	}
+	journals, _ := env.fs.ListJournals(b.ID)
+	found := false
+	for _, j := range journals {
+		content, _ := env.fs.ReadJournal(b.ID, j)
+		if strings.Contains(content, "雪球 探险回来了") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("friend journal missing adventure share note")
 	}
 }

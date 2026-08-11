@@ -2,7 +2,8 @@
 // 核心接口 + 可选能力接口集，插件按需实现，装配时由 Registry 类型断言发现。
 //
 // 信任边界：插件是编译期引入的可信代码，权限接近内核（能注册迁移、调数值），
-// 不支持第三方二进制热插拔。
+// 不支持第三方二进制热插拔。新增玩法不改 tick/store/pet 领域层；内置插件在
+// internal/plugins.Build 注册，cmd/pocketpetd 只做 NewRegistry(plugins.Build(cfg)...) 。
 package plugin
 
 import (
@@ -12,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	adkagent "google.golang.org/adk/v2/agent"
@@ -37,20 +39,41 @@ type (
 		Tools() []adktool.Tool
 	}
 	// EventSubscriber 订阅领域事件（接入 Engine 的事件流水）。
+	// OnEvent 必须快速返回且不得对同一宠物重入 Engine（emit 可能持有 petID 锁）；
+	// 耗时逻辑请自行异步化。
 	EventSubscriber interface {
 		OnEvent(ctx context.Context, e pet.Event)
 	}
 	// TickHook 在每个 tick 周期结算后被调用。
+	// 契约：必须快速返回（通常 < SlowTickWarn）；重活请异步或分批。
+	// Registry.TickHooks 会包装慢钩子告警（带 plugin 名）。
 	TickHook = tick.TickHook
 	// RouteProvider 注册 REST 路由（统一挂载在 /v1/plugins/<name>/ 前缀下）。
 	RouteProvider interface {
 		Routes() []Route
 	}
 	// SchemaProvider 声明插件自己的 SQLite 表/迁移（独立版本命名空间）。
+	// 表名建议以插件名或明确前缀开头（如 adventure_*），避免与核心表及他插件冲突。
 	SchemaProvider interface {
 		Migrations() []store.Migration
 	}
+	// Depender 声明硬依赖的其他插件名；InitAll 前校验，缺失则失败。
+	// 软依赖请用 PluginContext.HasPlugin 在 Init/运行时自行降级。
+	Depender interface {
+		DependsOn() []string
+	}
+	// Shutdowner 在进程退出时做清理（与 Init 对称，可选）。
+	Shutdowner interface {
+		Shutdown(ctx context.Context) error
+	}
 )
+
+// SlowTickWarn 是插件 TickHook 的慢执行告警阈值；超过则打 Warn 日志，不中断 tick。
+const SlowTickWarn = 100 * time.Millisecond
+
+// CoreTables 是核心存储表名（插件经 DB() 拿的是共享连接，约定禁止改写这些表；
+// 数值/事件请走 AdjustStats / Care / Emit）。
+var CoreTables = []string{"pets", "pet_events", "kv_meta"}
 
 // Route 是插件注册的一条 REST 路由。Pattern 是相对插件命名空间的路径
 // （如 "/pets/{id}/inventory"），挂载时统一加 "/v1/plugins/<plugin>" 前缀，
@@ -62,21 +85,35 @@ type Route struct {
 }
 
 // PluginContext 是给插件的受控能力面：跨宠物访问、数值调整、事件、文件、存储、日志。
-// 刻意保持小巧——所有状态操作都经 tick.Engine 的加锁/补算路径。
+// 刻意保持小巧——所有宠物状态操作都经 tick.Engine 的加锁/补算路径。
 type PluginContext struct {
-	engine *tick.Engine
-	fs     *petfs.FS
-	db     *sql.DB
-	logger *slog.Logger
+	engine   *tick.Engine
+	fs       *petfs.FS
+	db       *sql.DB
+	logger   *slog.Logger
+	registry *Registry
+	plugin   string // InitAll 注入的当前插件名
 }
 
 // NewPluginContext 构造插件上下文（由 main 在装配期调用）。
-func NewPluginContext(eng *tick.Engine, fs *petfs.FS, db *sql.DB, logger *slog.Logger) PluginContext {
-	return PluginContext{engine: eng, fs: fs, db: db, logger: logger}
+// registry 可为 nil（单测）；非 nil 时插件可通过 HasPlugin 查软依赖。
+func NewPluginContext(eng *tick.Engine, fs *petfs.FS, db *sql.DB, logger *slog.Logger, registry *Registry) PluginContext {
+	return PluginContext{engine: eng, fs: fs, db: db, logger: logger, registry: registry}
 }
 
 // Logger 返回插件日志器（带 plugin=<name> 字段由 Init 包装）。
 func (c PluginContext) Logger() *slog.Logger { return c.logger }
+
+// PluginName 返回当前上下文所属插件名（Init 期内非空）。
+func (c PluginContext) PluginName() string { return c.plugin }
+
+// HasPlugin 报告名为 name 的插件是否已注册（软依赖检查）。
+func (c PluginContext) HasPlugin(name string) bool {
+	if c.registry == nil {
+		return false
+	}
+	return c.registry.Has(name)
+}
 
 // ListPets 返回全部宠物（读存储层，不触发补算）。
 func (c PluginContext) ListPets(ctx context.Context) ([]*pet.Pet, error) {
@@ -129,7 +166,14 @@ func (c PluginContext) AppendJournal(id, text string, now time.Time) error {
 	return c.fs.AppendJournal(id, text, now)
 }
 
-// DB 返回插件表所在的数据库连接（插件自己的表，经 SchemaProvider 迁移建立）。
+// DB 返回共享 SQLite 连接（信任模型下与核心同库）。
+//
+// 约定（契约，非强制沙箱）：
+//   - 只读写本插件 SchemaProvider 声明的表；
+//   - 禁止改写 CoreTables（pets / pet_events / kv_meta）；宠物数值与事件走 AdjustStats/Care/Emit；
+//   - 跨插件共享数据须经对方导出的包级 API（如 adventure.TakeItem），勿直接 SQL 耦合他插件表。
+//
+// SQLite 无独立 schema 命名空间，故以约定 + 迁移版本隔离（plugin:<name>）代替物理隔离。
 func (c PluginContext) DB() *sql.DB { return c.db }
 
 // ToolResult 是插件工具的统一返回结构（与内置自我行为工具同风格）：
@@ -148,15 +192,64 @@ func PetIDOf(ctx adkagent.Context) string {
 // Registry 持有插件实例并做能力发现。
 type Registry struct {
 	plugins []Plugin
+
+	mu       sync.RWMutex
+	eventCtx context.Context // SetEventContext 注入；供 EventSubscriber 取消传播
 }
 
 // NewRegistry 创建注册表（注册顺序即装配顺序）。
 func NewRegistry(plugins ...Plugin) *Registry {
-	return &Registry{plugins: plugins}
+	return &Registry{plugins: plugins, eventCtx: context.Background()}
 }
 
 // Plugins 返回全部已注册插件。
 func (r *Registry) Plugins() []Plugin { return r.plugins }
+
+// Has 报告名为 name 的插件是否已注册。
+func (r *Registry) Has(name string) bool {
+	for _, p := range r.plugins {
+		if p.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// SetEventContext 设置 EventSubscriber 收到的 ctx（通常为进程信号 ctx）。
+// 可在 EventSinks 收集之后、Run 之前调用；Publish 时动态读取。
+func (r *Registry) SetEventContext(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.eventCtx = ctx
+}
+
+func (r *Registry) eventContext() context.Context {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.eventCtx == nil {
+		return context.Background()
+	}
+	return r.eventCtx
+}
+
+// checkDeps 校验全部 Depender 的硬依赖是否已注册。
+func (r *Registry) checkDeps() error {
+	for _, p := range r.plugins {
+		d, ok := p.(Depender)
+		if !ok {
+			continue
+		}
+		for _, dep := range d.DependsOn() {
+			if !r.Has(dep) {
+				return fmt.Errorf("plugin %s depends on %q, which is not registered", p.Name(), dep)
+			}
+		}
+	}
+	return nil
+}
 
 // RunMigrations 执行全部 SchemaProvider 插件的迁移（各自独立版本命名空间）。
 func (r *Registry) RunMigrations(st *store.Store) error {
@@ -172,16 +265,37 @@ func (r *Registry) RunMigrations(st *store.Store) error {
 	return nil
 }
 
-// InitAll 按注册顺序初始化全部插件。
+// InitAll 先校验硬依赖，再按注册顺序初始化全部插件。
 func (r *Registry) InitAll(ctx PluginContext) error {
+	if err := r.checkDeps(); err != nil {
+		return err
+	}
+	ctx.registry = r
 	for _, p := range r.plugins {
 		c := ctx
+		c.plugin = p.Name()
 		c.logger = ctx.logger.With("plugin", p.Name())
 		if err := p.Init(c); err != nil {
 			return fmt.Errorf("plugin %s init: %w", p.Name(), err)
 		}
 	}
 	return nil
+}
+
+// ShutdownAll 按注册逆序调用 Shutdowner（后启先停）。
+func (r *Registry) ShutdownAll(ctx context.Context) error {
+	var first error
+	for i := len(r.plugins) - 1; i >= 0; i-- {
+		p := r.plugins[i]
+		s, ok := p.(Shutdowner)
+		if !ok {
+			continue
+		}
+		if err := s.Shutdown(ctx); err != nil && first == nil {
+			first = fmt.Errorf("plugin %s shutdown: %w", p.Name(), err)
+		}
+	}
+	return first
 }
 
 // Tools 收集全部 ToolProvider 插件的工具。
@@ -200,26 +314,45 @@ func (r *Registry) EventSinks() []tick.EventSink {
 	var out []tick.EventSink
 	for _, p := range r.plugins {
 		if es, ok := p.(EventSubscriber); ok {
-			out = append(out, subscriberSink{es})
+			out = append(out, subscriberSink{es: es, reg: r})
 		}
 	}
 	return out
 }
 
 // subscriberSink 把 EventSubscriber（带 ctx）适配为 EventSink（无 ctx）。
-type subscriberSink struct{ es EventSubscriber }
+type subscriberSink struct {
+	es  EventSubscriber
+	reg *Registry
+}
 
-func (s subscriberSink) Publish(e pet.Event) { s.es.OnEvent(context.Background(), e) }
+func (s subscriberSink) Publish(e pet.Event) {
+	s.es.OnEvent(s.reg.eventContext(), e)
+}
 
-// TickHooks 收集全部 TickHook 插件。
+// TickHooks 收集全部 TickHook 插件，并包装慢执行告警（带 plugin 名）。
 func (r *Registry) TickHooks() []tick.TickHook {
 	var out []tick.TickHook
 	for _, p := range r.plugins {
 		if th, ok := p.(TickHook); ok {
-			out = append(out, th)
+			out = append(out, timedTickHook{name: p.Name(), inner: th})
 		}
 	}
 	return out
+}
+
+// timedTickHook 在钩子耗时超过 SlowTickWarn 时打 Warn，不打断后续钩子。
+type timedTickHook struct {
+	name  string
+	inner tick.TickHook
+}
+
+func (h timedTickHook) OnTick(ctx context.Context, now time.Time) {
+	start := time.Now()
+	h.inner.OnTick(ctx, now)
+	if d := time.Since(start); d >= SlowTickWarn {
+		slog.Warn("plugin tick hook slow", "plugin", h.name, "duration", d, "warn_after", SlowTickWarn)
+	}
 }
 
 // PluginRoutes 是一个插件的路由集合。

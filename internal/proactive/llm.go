@@ -4,15 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	"google.golang.org/genai"
-
-	adkagent "google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/runner"
-	"google.golang.org/adk/v2/session"
-
+	"github.com/lalolv/PocketPet/internal/adkx"
 	"github.com/lalolv/PocketPet/internal/llm"
 	"github.com/lalolv/PocketPet/internal/pet"
 )
@@ -42,40 +35,20 @@ func (r *LLMMessager) Compose(ctx context.Context, req ComposeRequest) (string, 
 	if reason == "" {
 		return "", nil
 	}
-	m, err := llm.NewModel(ctx, r.Cfg)
+	text, err := adkx.Ephemeral{
+		Cfg:           r.Cfg,
+		AppName:       "pocketpet-proactive",
+		AgentName:     "proactive_messager",
+		Description:   "宠物状态驱动的主动消息生成器",
+		Instruction:   composeInstruction,
+		UserID:        "pet",
+		SessionPrefix: "proactive",
+		Prompt:        buildComposePrompt(req, reason),
+	}.Run(ctx)
 	if err != nil {
 		return "", err
 	}
-	ag, err := llmagent.New(llmagent.Config{
-		Name:        "proactive_messager",
-		Description: "宠物状态驱动的主动消息生成器",
-		Model:       m,
-		Instruction: composeInstruction,
-	})
-	if err != nil {
-		return "", fmt.Errorf("create messager agent: %w", err)
-	}
-	rn, err := runner.New(runner.Config{
-		AppName:           "pocketpet-proactive",
-		Agent:             ag,
-		SessionService:    session.InMemoryService(),
-		AutoCreateSession: true,
-	})
-	if err != nil {
-		return "", fmt.Errorf("create messager runner: %w", err)
-	}
-
-	// 一次性调用：每条消息用全新 session，不带历史。
-	sessionID := fmt.Sprintf("proactive-%d", time.Now().UnixNano())
-	msg := &genai.Content{Role: "user", Parts: []*genai.Part{{Text: buildComposePrompt(req, reason)}}}
-	var sb strings.Builder
-	for ev, err := range rn.Run(ctx, "pet", sessionID, msg, adkagent.RunConfig{}) {
-		if err != nil {
-			return "", err
-		}
-		sb.WriteString(eventText(ev))
-	}
-	return strings.TrimSpace(sb.String()), nil
+	return strings.TrimSpace(text), nil
 }
 
 // composeInstruction 是消息生成器的 system prompt：角色 + 输出契约。
@@ -121,18 +94,4 @@ func reasonFor(req ComposeRequest) string {
 		return s
 	}
 	return ""
-}
-
-// eventText 提取事件中的文本（跳过思考部件与工具调用/响应）。
-func eventText(ev *session.Event) string {
-	if ev == nil || ev.Content == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, part := range ev.Content.Parts {
-		if part != nil && part.Text != "" && !part.Thought {
-			sb.WriteString(part.Text)
-		}
-	}
-	return sb.String()
 }

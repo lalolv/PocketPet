@@ -6,15 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"google.golang.org/genai"
-
-	adkagent "google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
-	"google.golang.org/adk/v2/runner"
-	"google.golang.org/adk/v2/session"
-
+	"github.com/lalolv/PocketPet/internal/adkx"
 	"github.com/lalolv/PocketPet/internal/llm"
 )
 
@@ -31,40 +24,20 @@ type LLMReflector struct {
 
 // Reflect 实现 Reflector。
 func (r *LLMReflector) Reflect(ctx context.Context, req ReflectRequest) (ReflectResult, error) {
-	m, err := llm.NewModel(ctx, r.Cfg)
+	text, err := adkx.Ephemeral{
+		Cfg:           r.Cfg,
+		AppName:       "pocketpet-dream",
+		AgentName:     "dream_reflector",
+		Description:   "宠物睡眠时的潜意识整理器",
+		Instruction:   reflectInstruction,
+		UserID:        "subconscious",
+		SessionPrefix: "reflect",
+		Prompt:        buildReflectPrompt(req),
+	}.Run(ctx)
 	if err != nil {
 		return ReflectResult{}, err
 	}
-	ag, err := llmagent.New(llmagent.Config{
-		Name:        "dream_reflector",
-		Description: "宠物睡眠时的潜意识整理器",
-		Model:       m,
-		Instruction: reflectInstruction,
-	})
-	if err != nil {
-		return ReflectResult{}, fmt.Errorf("create reflector agent: %w", err)
-	}
-	rn, err := runner.New(runner.Config{
-		AppName:           "pocketpet-dream",
-		Agent:             ag,
-		SessionService:    session.InMemoryService(),
-		AutoCreateSession: true,
-	})
-	if err != nil {
-		return ReflectResult{}, fmt.Errorf("create reflector runner: %w", err)
-	}
-
-	// 一次性调用：每次整理用全新 session，不带历史。
-	sessionID := fmt.Sprintf("reflect-%d", time.Now().UnixNano())
-	msg := &genai.Content{Role: "user", Parts: []*genai.Part{{Text: buildReflectPrompt(req)}}}
-	var sb strings.Builder
-	for ev, err := range rn.Run(ctx, "subconscious", sessionID, msg, adkagent.RunConfig{}) {
-		if err != nil {
-			return ReflectResult{}, err
-		}
-		sb.WriteString(eventText(ev))
-	}
-	return parseReflectResult(sb.String())
+	return parseReflectResult(text)
 }
 
 // reflectInstruction 是整理器的 system prompt：角色 + 输出契约 + 整理规则。
@@ -167,18 +140,4 @@ func parseReflectResult(text string) (ReflectResult, error) {
 		}
 	}
 	return res, nil
-}
-
-// eventText 提取事件中的文本（跳过思考部件与工具调用/响应）。
-func eventText(ev *session.Event) string {
-	if ev == nil || ev.Content == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, part := range ev.Content.Parts {
-		if part != nil && part.Text != "" && !part.Thought {
-			sb.WriteString(part.Text)
-		}
-	}
-	return sb.String()
 }

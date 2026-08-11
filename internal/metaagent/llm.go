@@ -17,6 +17,7 @@ import (
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 
+	"github.com/lalolv/PocketPet/internal/adkx"
 	"github.com/lalolv/PocketPet/internal/llm"
 )
 
@@ -141,7 +142,7 @@ func (m *Midwife) runLLM(ctx context.Context, w *Workshop) error {
 			}
 			return err
 		}
-		if text := eventPlainText(ev); text != "" {
+		if text := adkx.EventText(ev); text != "" {
 			narrBuf.WriteString(text)
 		}
 		// 工具在同一 Workshop 上改 draft；finalize 后文件会删，以内存标志为准。
@@ -153,22 +154,4 @@ func (m *Midwife) runLLM(ctx context.Context, w *Workshop) error {
 	}
 	flushNarr()
 	return nil
-}
-
-// eventPlainText 提取事件中的可见文本（跳过思考与工具部件）。
-func eventPlainText(ev *session.Event) string {
-	if ev == nil || ev.Content == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, part := range ev.Content.Parts {
-		if part == nil || part.Text == "" || part.Thought {
-			continue
-		}
-		if part.FunctionCall != nil || part.FunctionResponse != nil {
-			continue
-		}
-		sb.WriteString(part.Text)
-	}
-	return sb.String()
 }

@@ -106,15 +106,18 @@ llm:
 ├── internal/
 │   ├── pet/             # 领域层：属性/成长/规则（纯 Go，不依赖 LLM）
 │   ├── agent/           # PetAgent 运行时：指令装配、工具、降级文案
+│   ├── metaagent/       # MetaAgent 诞生：工具链 / 脚本 / fallback
 │   ├── dream/           # 梦境整理：记忆凝练、SOUL 演化、Skill 沉淀
 │   ├── proactive/       # 主动行为：状态触发的主动消息、自动入睡/醒来
 │   ├── llm/             # LLM 连接工厂（OpenAI Chat Completions 兼容端点）
-│   ├── metaagent/       # MetaAgent 诞生：工具链 / 脚本 / fallback
+│   ├── adkx/            # ADK 薄脚手架（一次性 runner / 事件文本）
+│   ├── httpx/           # 统一 JSON HTTP 响应（api 与插件共用）
 │   ├── api/             # REST + SSE 接口层
 │   ├── store/           # SQLite：数值状态 + 事件流水
 │   ├── petfs/           # 宠物文件系统（PET/SOUL/MEMORY/skills）
 │   ├── tick/            # tick 引擎：衰减、离线结算
-│   ├── plugin(s)/       # Go 插件体系与内置插件（探险 / 交友）
+│   ├── plugin/          # Go 插件契约与注册表
+│   ├── plugins/         # 内置插件（探险 / 交友）
 │   └── tui/             # TUI 客户端实现
 ├── skills/              # 全局技能包
 ├── configs/             # 配置示例

@@ -1,11 +1,11 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/lalolv/PocketPet/internal/httpx"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/store"
 )
@@ -22,27 +22,12 @@ const (
 	codeInternal      = "internal"
 )
 
-// errorBody 是统一错误响应格式 {"error":{"code","message"}}。
-type errorBody struct {
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
 func writeError(w http.ResponseWriter, status int, code, msg string) {
-	var b errorBody
-	b.Error.Code = code
-	b.Error.Message = msg
-	writeJSON(w, status, b)
+	httpx.WriteError(w, status, code, msg)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("write json failed", "err", err)
-	}
+	httpx.WriteJSON(w, status, v)
 }
 
 // writeDomainError 把领域/存储错误映射为 4xx 业务错误，未知错误映射 500。

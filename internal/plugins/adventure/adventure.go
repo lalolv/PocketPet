@@ -22,7 +22,7 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"github.com/lalolv/PocketPet/internal/api"
+	"github.com/lalolv/PocketPet/internal/httpx"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/plugin"
 	"github.com/lalolv/PocketPet/internal/store"
@@ -309,15 +309,15 @@ func (a *Adventure) handleInventory(w http.ResponseWriter, r *http.Request) {
 	p, err := a.ctx.GetPet(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			api.WriteError(w, http.StatusNotFound, "not_found", "pet not found")
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "pet not found")
 			return
 		}
-		api.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
 	items, err := Inventory(a.db, id)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
 	type itemView struct {
@@ -331,10 +331,10 @@ func (a *Adventure) handleInventory(w http.ResponseWriter, r *http.Request) {
 	}
 	left, adventuring, err := a.activeTicks(id)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"pet_id":      id,
 		"name":        p.Name,
 		"adventuring": adventuring,

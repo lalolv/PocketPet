@@ -23,6 +23,7 @@ import (
 	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
 
+	"github.com/lalolv/PocketPet/internal/adkx"
 	"github.com/lalolv/PocketPet/internal/config"
 	"github.com/lalolv/PocketPet/internal/llm"
 	"github.com/lalolv/PocketPet/internal/pet"
@@ -202,7 +203,7 @@ func (a *PetAgent) run(ctx context.Context, petID, message string, streaming boo
 				runErr = fmt.Errorf("llm error %s: %s", ev.LLMResponse.ErrorCode, ev.LLMResponse.ErrorMessage)
 				break
 			}
-			text := eventText(ev)
+			text := adkx.EventText(ev)
 			if text == "" {
 				continue
 			}
@@ -384,20 +385,6 @@ func (a *PetAgent) assemble(ctx context.Context, petID string) (string, error) {
 // yieldFallback 产出一条降级文案（保证 chat 永远有回应）。
 func (a *PetAgent) yieldFallback(yield func(string, error) bool, p *pet.Pet) {
 	yield(a.fallbackLine(p), nil)
-}
-
-// eventText 提取事件中的文本（跳过思考部件与工具调用/响应）。
-func eventText(ev *session.Event) string {
-	if ev == nil || ev.Content == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, part := range ev.Content.Parts {
-		if part != nil && part.Text != "" && !part.Thought {
-			sb.WriteString(part.Text)
-		}
-	}
-	return sb.String()
 }
 
 // truncateRunes 按字符数截断，避免按字节截断 UTF-8。

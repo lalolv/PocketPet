@@ -22,7 +22,7 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"github.com/lalolv/PocketPet/internal/api"
+	"github.com/lalolv/PocketPet/internal/httpx"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/plugin"
 	"github.com/lalolv/PocketPet/internal/plugins/adventure"
@@ -246,16 +246,16 @@ func (f *Friends) handleFriends(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := f.ctx.GetPet(r.Context(), id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			api.WriteError(w, http.StatusNotFound, "not_found", "pet not found")
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "pet not found")
 			return
 		}
-		api.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
 	rows, err := f.db.QueryContext(r.Context(),
 		`SELECT friend_id, affinity, interactions FROM friendships WHERE pet_id = ? ORDER BY affinity DESC`, id)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
 	defer rows.Close()
@@ -286,5 +286,5 @@ func (f *Friends) handleFriends(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, sc.view)
 	}
-	api.WriteJSON(w, http.StatusOK, map[string]any{"pet_id": id, "friends": views})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"pet_id": id, "friends": views})
 }

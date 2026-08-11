@@ -131,6 +131,7 @@ llm:
 - [架构设计方案](docs/03-架构设计方案.md)
 - [MetaAgent 宠物诞生设计](docs/04-MetaAgent宠物诞生设计.md)
 - [插件开发指南](docs/05-插件开发指南.md)（新增玩法 / vibe coding 步骤）
+- [探险插件设计](docs/06-探险插件设计.md)（地图图结构玩法重构）
 
 ## License
 

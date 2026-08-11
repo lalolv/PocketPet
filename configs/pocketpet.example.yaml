@@ -49,16 +49,17 @@ mcp:
   #   env: {}
 
 # 内置 Go 玩法插件（编译期注册）。段缺失时全部默认启用、使用代码内默认数值。
-# 关闭某插件不改领域内核，但需重启；friends 对 adventure 为软依赖（关闭探险后 gift 会业务降级）。
+# 各玩法插件彼此独立，可单独开关；关闭后需重启。
 plugins:
   adventure:
     enabled: true
-    # ticks: 3              # 探险持续 tick 数
+    # map_refresh_ticks: 60
+    # node_count: 12
+    # max_branches: 5
+    # chest_min_pct: 0.15
+    # chest_max_pct: 0.25
     # energy_cost: 15
-    # exp_reward: 10
-    # happy_reward: 5
-    # injury_chance: 0.25
-    # injury_health: 5
+    # step_interval_seconds: 5  # 行程步进（墙钟秒）；与养成 tick 无关
   friends:
     enabled: true
     # visit_affinity: 5
@@ -66,4 +67,3 @@ plugins:
     # peek_affinity: 2
     # gift_affinity: 3
     # gift_happy: 5
-    # adventure_affinity: 1  # 好友探险归来时的好感增量

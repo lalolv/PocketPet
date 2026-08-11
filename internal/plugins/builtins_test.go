@@ -20,13 +20,13 @@ func TestBuildDefaults(t *testing.T) {
 func TestBuildDisabledAndOverrides(t *testing.T) {
 	off := false
 	on := true
-	ticks := 9
+	refresh := 9
 	visit := 7.0
 	cfg := config.Config{
 		Plugins: config.PluginsConfig{
 			Adventure: config.AdventurePluginConfig{
-				Enabled: &off,
-				Ticks:   &ticks,
+				Enabled:         &off,
+				MapRefreshTicks: &refresh,
 			},
 			Friends: config.FriendsPluginConfig{
 				VisitAffinity: &visit,
@@ -48,7 +48,7 @@ func TestBuildDisabledAndOverrides(t *testing.T) {
 		t.Fatalf("Build both = %v", pluginNames(got))
 	}
 	adv, ok := got[0].(*adventure.Adventure)
-	if !ok || adv.Ticks != 9 {
+	if !ok || adv.MapRefreshTicks != 9 {
 		t.Fatalf("adventure override = %#v", got[0])
 	}
 }

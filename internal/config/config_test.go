@@ -223,12 +223,11 @@ func TestPluginsConfig(t *testing.T) {
 plugins:
   adventure:
     enabled: false
-    ticks: 5
+    map_refresh_ticks: 5
     energy_cost: 20
   friends:
     enabled: true
     visit_affinity: 7
-    adventure_affinity: 2
 `)
 	cfg, err = Load(path)
 	if err != nil {
@@ -240,16 +239,13 @@ plugins:
 	if !cfg.FriendsEnabled() {
 		t.Fatal("friends should stay enabled")
 	}
-	if cfg.Plugins.Adventure.Ticks == nil || *cfg.Plugins.Adventure.Ticks != 5 {
-		t.Fatalf("ticks = %+v", cfg.Plugins.Adventure.Ticks)
+	if cfg.Plugins.Adventure.MapRefreshTicks == nil || *cfg.Plugins.Adventure.MapRefreshTicks != 5 {
+		t.Fatalf("map_refresh_ticks = %+v", cfg.Plugins.Adventure.MapRefreshTicks)
 	}
 	if cfg.Plugins.Adventure.EnergyCost == nil || *cfg.Plugins.Adventure.EnergyCost != 20 {
 		t.Fatalf("energy_cost = %+v", cfg.Plugins.Adventure.EnergyCost)
 	}
 	if cfg.Plugins.Friends.VisitAffinity == nil || *cfg.Plugins.Friends.VisitAffinity != 7 {
 		t.Fatalf("visit_affinity = %+v", cfg.Plugins.Friends.VisitAffinity)
-	}
-	if cfg.Plugins.Friends.AdventureAffinity == nil || *cfg.Plugins.Friends.AdventureAffinity != 2 {
-		t.Fatalf("adventure_affinity = %+v", cfg.Plugins.Friends.AdventureAffinity)
 	}
 }

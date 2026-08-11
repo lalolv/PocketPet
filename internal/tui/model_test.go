@@ -166,6 +166,68 @@ func TestCareKeysAndAnim(t *testing.T) {
 	}
 }
 
+// TestAdventureEventsDriveAnimation 验证探险 SSE 驱动动画与日志。
+func TestAdventureEventsDriveAnimation(t *testing.T) {
+	m := NewModel(NewClient("http://unused"))
+	m.screen = screenMain
+	m.pet = testPet()
+	m.sseCh = make(chan Event, 1)
+
+	m = update(t, m, eventMsg(Event{Type: "pet.adventure_started", Message: "团团 从【入口】出发去探险了", CreatedAt: t0}))
+	if !m.adventuring || m.action != animAdventure {
+		t.Fatalf("after start: adventuring=%v action=%v", m.adventuring, m.action)
+	}
+	view := m.renderString()
+	if !strings.Contains(view, "探险中") || !strings.Contains(view, "[a]探险") {
+		t.Fatalf("view missing adventure UI:\n%s", view)
+	}
+
+	m = update(t, m, eventMsg(Event{Type: "pet.adventure_moved", Message: "团团 走到了【地点3】", CreatedAt: t0}))
+	if m.advNode != "地点3" {
+		t.Fatalf("advNode = %q", m.advNode)
+	}
+	m = update(t, m, eventMsg(Event{Type: "pet.adventure_chest", Message: "团团 在【地点3】发现了一个宝箱！", CreatedAt: t0}))
+	if m.advChests != 1 {
+		t.Fatalf("advChests = %d", m.advChests)
+	}
+	foundStar := false
+	for _, l := range m.logs {
+		if strings.Contains(l, "宝箱") {
+			foundStar = true
+		}
+	}
+	if !foundStar {
+		t.Fatalf("logs = %v", m.logs)
+	}
+
+	// 探险动画不因普通动作帧数归零
+	for i := 0; i < animActionTicks+2; i++ {
+		m = update(t, m, tickMsg(time.Now()))
+	}
+	if m.action != animAdventure {
+		t.Fatalf("adventure anim should loop, got %v", m.action)
+	}
+
+	m = update(t, m, eventMsg(Event{Type: "pet.adventure_finished", Message: "团团 探险回来了，沿途发现了 1 个宝箱", CreatedAt: t0}))
+	if m.adventuring || m.action != animIdle {
+		t.Fatalf("after finish: adventuring=%v action=%v", m.adventuring, m.action)
+	}
+}
+
+func TestAdventureKeyStartsCmd(t *testing.T) {
+	m := NewModel(NewClient("http://unused"))
+	m.screen = screenMain
+	m.pet = testPet()
+	mod, cmd := m.onMainKey(tea.KeyPressMsg{Text: "a"})
+	mm := mod.(model)
+	if mm.action != animAdventure {
+		t.Fatalf("action = %v", mm.action)
+	}
+	if cmd == nil {
+		t.Fatal("expected startAdventureCmd")
+	}
+}
+
 // TestSleepAndWakeEvents 验证 SSE 事件同步动画状态。
 func TestSleepAndWakeEvents(t *testing.T) {
 	m := NewModel(NewClient("http://unused"))

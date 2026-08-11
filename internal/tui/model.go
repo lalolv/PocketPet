@@ -41,6 +41,7 @@ const (
 	animPlay
 	animClean
 	animCelebrate // stage_up 庆祝
+	animAdventure // 探险中（循环直到结束）
 )
 
 // 创建表单的选项。
@@ -69,16 +70,19 @@ type model struct {
 	birthReady           bool     // 已收到 genesis.ready，避免重复 get
 
 	// 主界面
-	pet        Pet
-	action     animAction
-	frame      int
-	logs       []string
-	chatMode   bool
-	input      string
-	sseCh      chan Event
-	stateCh    chan PetState
-	sseCancel  context.CancelFunc
-	petLoading bool // 首次进入主界面尚未拿到状态
+	pet         Pet
+	action      animAction
+	frame       int
+	logs        []string
+	chatMode    bool
+	input       string
+	sseCh       chan Event
+	stateCh     chan PetState
+	sseCancel   context.CancelFunc
+	petLoading  bool // 首次进入主界面尚未拿到状态
+	adventuring bool // 探险进行中（动画循环）
+	advNode     string
+	advChests   int
 
 	// 流式聊天
 	streaming  bool              // 正在接收回复流
@@ -111,6 +115,8 @@ type (
 		pet    Pet
 		action string
 	}
+	adventureResultMsg AdventureRun
+	adventureStatusMsg AdventureRun
 )
 
 // chatEvent 是聊天流上的一条消息：文本块、结束（含完整回复）或错误。
@@ -173,6 +179,26 @@ func careCmd(c *Client, id, action string) tea.Cmd {
 			return errMsg{"care", err}
 		}
 		return careResultMsg{pet: p, action: action}
+	}
+}
+
+func startAdventureCmd(c *Client, id string) tea.Cmd {
+	return func() tea.Msg {
+		run, err := c.StartAdventure(context.Background(), id)
+		if err != nil {
+			return errMsg{"adventure", err}
+		}
+		return adventureResultMsg(run)
+	}
+}
+
+func adventureStatusCmd(c *Client, id string) tea.Cmd {
+	return func() tea.Msg {
+		run, err := c.GetAdventureRun(context.Background(), id)
+		if err != nil {
+			return nil // 插件未启用等：忽略
+		}
+		return adventureStatusMsg(run)
 	}
 }
 
@@ -250,6 +276,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.frame++
+		// 探险动画持续循环，直到 SSE 结束事件清掉。
+		if m.action == animAdventure {
+			return m, frameTick()
+		}
 		if m.action != animIdle && m.action != animCelebrate && m.frame >= animActionTicks {
 			m.action, m.frame = animIdle, 0
 		}
@@ -310,11 +340,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.pet.Alive {
 			m.logf("%s 已经不在了……（RIP）", m.pet.Name)
 		}
-		return m, nil
+		return m, adventureStatusCmd(m.client, m.pet.ID)
 
 	case careResultMsg:
 		m.pet = msg.pet
 		m.logf("✔ %s", actionLabel(msg.action))
+		return m, nil
+
+	case adventureResultMsg:
+		run := AdventureRun(msg)
+		m.applyAdventureRun(run)
+		if run.Adventuring {
+			m.logf("✔ 出发探险")
+		}
+		return m, nil
+
+	case adventureStatusMsg:
+		m.applyAdventureRun(AdventureRun(msg))
 		return m, nil
 
 	case chatEventMsg:
@@ -533,8 +575,19 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.chatMode = true
 		m.input = ""
 		return m, nil
+	case "a":
+		if m.adventuring {
+			m.logf("· 还在探险中（%s）", m.advNode)
+			return m, nil
+		}
+		if m.pet.Sleeping {
+			m.logf("· 睡觉时没法出门探险")
+			return m, nil
+		}
+		m.action, m.frame = animAdventure, 0
+		return m, startAdventureCmd(m.client, m.pet.ID)
 	case "r":
-		return m, getPetCmd(m.client, m.pet.ID)
+		return m, tea.Batch(getPetCmd(m.client, m.pet.ID), adventureStatusCmd(m.client, m.pet.ID))
 	}
 	return m, nil
 }
@@ -551,6 +604,28 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 		return m, waitEventCmd(m.sseCh)
 	case "pet.proactive", "pet.dream": // 宠物主动说的话，与聊天回复同格式
 		m.logf("[%s]: %s", m.pet.Name, ev.Message)
+	case "pet.adventure_started":
+		m.adventuring = true
+		m.action, m.frame = animAdventure, 0
+		m.advNode = "入口"
+		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
+	case "pet.adventure_moved":
+		m.adventuring = true
+		m.action = animAdventure
+		if name := nodeNameFromAdventureMsg(ev.Message); name != "" {
+			m.advNode = name
+		}
+		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
+	case "pet.adventure_chest":
+		m.adventuring = true
+		m.action = animAdventure
+		m.advChests++
+		m.logf("★ %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
+	case "pet.adventure_finished", "pet.adventure_aborted":
+		m.adventuring = false
+		m.action, m.frame = animIdle, 0
+		m.advNode = ""
+		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	case "pet.born":
 		if m.screen == screenBirth && !m.birthReady {
 			m.birthReady = true
@@ -651,6 +726,9 @@ func (m model) onError(e errMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenOffline
 		return m, nil
 	}
+	if e.where == "adventure" && !m.adventuring {
+		m.action, m.frame = animIdle, 0
+	}
 	m.logf("✗ %s", friendlyErr(e.err))
 	return m, nil
 }
@@ -699,6 +777,30 @@ func (m *model) shutdown() {
 	}
 }
 
+// applyAdventureRun 根据行程快照同步探险动画状态。
+func (m *model) applyAdventureRun(run AdventureRun) {
+	m.adventuring = run.Adventuring
+	if run.Adventuring {
+		m.action = animAdventure
+		m.advNode = run.NodeName
+		m.advChests = len(run.ChestsFound)
+	} else if m.action == animAdventure {
+		m.action, m.frame = animIdle, 0
+		m.advNode = ""
+		m.advChests = 0
+	}
+}
+
+// nodeNameFromAdventureMsg 从「…走到了【地点名】」类文案提取地点。
+func nodeNameFromAdventureMsg(msg string) string {
+	i := strings.Index(msg, "【")
+	j := strings.Index(msg, "】")
+	if i >= 0 && j > i {
+		return msg[i+len("【") : j]
+	}
+	return ""
+}
+
 // logf 追加一条日志（保留最近 maxLogs 条）。
 func (m *model) logf(format string, args ...any) {
 	m.logs = append(m.logs, fmt.Sprintf(format, args...))
@@ -716,6 +818,10 @@ func friendlyErr(err error) string {
 			return "太累了，实在玩不动"
 		case "invalid_state":
 			return "现在做不了这个（可能在睡觉或没睡）"
+		case "already_adventuring":
+			return "还在外面探险呢"
+		case "no_map":
+			return "现在没有探险地图"
 		case "pet_dead":
 			return "已经没办法回应了……"
 		case "not_found":

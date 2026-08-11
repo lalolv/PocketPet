@@ -94,24 +94,24 @@ type PluginsConfig struct {
 
 // AdventurePluginConfig 是探险插件的开关与数值覆盖。
 type AdventurePluginConfig struct {
-	Enabled      *bool    `yaml:"enabled"`
-	Ticks        *int     `yaml:"ticks"`
-	EnergyCost   *float64 `yaml:"energy_cost"`
-	EXPReward    *int     `yaml:"exp_reward"`
-	HappyReward  *float64 `yaml:"happy_reward"`
-	InjuryChance *float64 `yaml:"injury_chance"`
-	InjuryHealth *float64 `yaml:"injury_health"`
+	Enabled             *bool    `yaml:"enabled"`
+	MapRefreshTicks     *int     `yaml:"map_refresh_ticks"`
+	NodeCount           *int     `yaml:"node_count"`
+	MaxBranches         *int     `yaml:"max_branches"`
+	ChestMinPct         *float64 `yaml:"chest_min_pct"`
+	ChestMaxPct         *float64 `yaml:"chest_max_pct"`
+	EnergyCost          *float64 `yaml:"energy_cost"`
+	StepIntervalSeconds *int     `yaml:"step_interval_seconds"` // 行程步进秒数，默认 5；与养成 tick 无关
 }
 
 // FriendsPluginConfig 是交友插件的开关与数值覆盖。
 type FriendsPluginConfig struct {
-	Enabled             *bool    `yaml:"enabled"`
-	VisitAffinity       *float64 `yaml:"visit_affinity"`
-	VisitHappy          *float64 `yaml:"visit_happy"`
-	PeekAffinity        *float64 `yaml:"peek_affinity"`
-	GiftAffinity        *float64 `yaml:"gift_affinity"`
-	GiftHappy           *float64 `yaml:"gift_happy"`
-	AdventureAffinity   *float64 `yaml:"adventure_affinity"` // 好友探险归来时的好感增量
+	Enabled       *bool    `yaml:"enabled"`
+	VisitAffinity *float64 `yaml:"visit_affinity"`
+	VisitHappy    *float64 `yaml:"visit_happy"`
+	PeekAffinity  *float64 `yaml:"peek_affinity"`
+	GiftAffinity  *float64 `yaml:"gift_affinity"`
+	GiftHappy     *float64 `yaml:"gift_happy"`
 }
 
 // pluginEnabled 解析 *bool 开关：nil = 默认启用。

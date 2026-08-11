@@ -3,7 +3,6 @@ package adventure
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +64,17 @@ func setup(t *testing.T) *testEnv {
 	sink := &fakeSink{}
 	fs := petfs.New(t.TempDir())
 	adv := New()
+	adv.MapRefreshTicks = 100
+	adv.NodeCount = 6
+	adv.MaxBranches = 3
+	adv.StepInterval = 0 // 单测手动 advanceAllRuns，不启墙钟步进
+	adv.IntN = func(n int) int {
+		if n <= 0 {
+			return 0
+		}
+		return 0
+	}
+	adv.Float64 = func() float64 { return 0.9 }
 	engine := tick.NewEngine(st, sink, time.Minute, 24*time.Hour, clock)
 	if err := st.RunPluginMigrations(adv.Name(), adv.Migrations()); err != nil {
 		t.Fatal(err)
@@ -85,94 +95,67 @@ func (env *testEnv) newPet(t *testing.T) *pet.Pet {
 	return p
 }
 
-// TestStartAndSettle 验证完整链路：开始 → 3 个 tick 结算 → 掉落入背包 + EXP + 事件。
-func TestStartAndSettle(t *testing.T) {
+func TestInitCreatesMap(t *testing.T) {
+	env := setup(t)
+	sm, err := env.adv.currentMap(context.Background())
+	if err != nil || len(sm.Graph.Nodes) != 6 {
+		t.Fatalf("map = %+v, %v", sm, err)
+	}
+}
+
+func TestStartAndWalkToFinish(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t)
-	// 确定性随机：掉落 roll=0.1（松果），受伤 roll=0.9（不受伤）
-	rolls := []float64{0.1, 0.9}
-	env.adv.Roll = func() float64 { r := rolls[0]; rolls = rolls[1:]; return r }
 
 	res, err := env.adv.start(context.Background(), p.ID)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || !res.OK {
+		t.Fatalf("start = %+v, %v", res, err)
 	}
-	if !res.OK {
-		t.Fatalf("start = %+v", res)
-	}
-	// 精力扣 15
 	got, _ := env.st.GetPet(context.Background(), p.ID)
 	if got.Stats.Energy != 85 {
 		t.Fatalf("energy = %v, want 85", got.Stats.Energy)
 	}
-	// 已在探险中：重复开始被拒
 	res, err = env.adv.start(context.Background(), p.ID)
 	if err != nil || res.OK {
 		t.Fatalf("re-start = %+v, %v", res, err)
 	}
 
-	// 推进 3 个 tick：前两次不结算，第三次结算
-	for i := 0; i < 2; i++ {
-		env.clock.Advance(time.Minute)
-		env.engine.TickAll(context.Background())
-	}
-	for _, typ := range env.sink.types() {
-		if typ == EventFinished {
-			t.Fatal("finished too early")
+	finished := false
+	for i := 0; i < 20; i++ {
+		env.adv.advanceAllRuns(context.Background(), env.clock.Now())
+		if _, ok, _ := env.adv.getRun(p.ID); !ok {
+			finished = true
+			break
 		}
 	}
-	env.clock.Advance(time.Minute)
-	env.engine.TickAll(context.Background())
-
-	// 结算：EXP +10、Happy +5（80+5=85，注意 tick 衰减 2 分钟 ≈ 0.1）
-	got, _ = env.st.GetPet(context.Background(), p.ID)
-	if got.Stats.EXP != 10 {
-		t.Fatalf("exp = %v, want 10", got.Stats.EXP)
+	if !finished {
+		t.Fatal("run did not finish")
 	}
-	if got.Stats.Happy < 84 || got.Stats.Happy > 85 {
-		t.Fatalf("happy = %v, want ~85", got.Stats.Happy)
-	}
-	if got.Stats.Health != 100 {
-		t.Fatalf("health = %v, want 100 (no injury)", got.Stats.Health)
-	}
-	items, err := Inventory(env.st.DB(), p.ID)
-	if err != nil || items["pinecone"] != 1 {
-		t.Fatalf("inventory = %v, %v", items, err)
-	}
-	// 事件序列：born → started → finished（含掉落名）
 	types := env.sink.types()
-	if types[len(types)-1] != EventFinished {
-		t.Fatalf("events = %v", types)
+	foundFinish := false
+	for _, typ := range types {
+		if typ == EventFinished {
+			foundFinish = true
+		}
 	}
-	var last pet.Event
-	for _, e := range env.sink.events {
-		last = e
-	}
-	if !strings.Contains(last.Message, "松果") {
-		t.Fatalf("finish message = %q", last.Message)
-	}
-	// 状态已清理
-	if _, ok, _ := env.adv.activeTicks(p.ID); ok {
-		t.Fatal("active row not cleared")
+	if !foundFinish {
+		t.Fatalf("events = %v, want finished", types)
 	}
 }
 
-// TestStartRejected 验证开始探险的前置拒绝：睡觉中 / 精力不足。
 func TestStartRejected(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t)
 
-	// 精力不足（直接改库存档）
 	p.Stats.Energy = 10
 	if err := env.st.SavePet(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	res, err := env.adv.start(context.Background(), p.ID)
 	if err != nil || res.OK || !strings.Contains(res.Outcome, "太累") {
-		t.Fatalf("low energy start = %+v, %v", res, err)
+		t.Fatalf("low energy = %+v, %v", res, err)
 	}
 
-	// 睡觉中
 	p.Stats.Energy = 100
 	p.Sleeping = true
 	if err := env.st.SavePet(context.Background(), p); err != nil {
@@ -180,21 +163,40 @@ func TestStartRejected(t *testing.T) {
 	}
 	res, err = env.adv.start(context.Background(), p.ID)
 	if err != nil || res.OK || !strings.Contains(res.Outcome, "睡觉") {
-		t.Fatalf("sleeping start = %+v, %v", res, err)
-	}
-	// 无 started 事件
-	for _, typ := range env.sink.types() {
-		if typ == EventStarted {
-			t.Fatal("no start event expected")
-		}
+		t.Fatalf("sleeping = %+v, %v", res, err)
 	}
 }
 
-// TestInventoryRoute 验证背包路由（含 /v1/plugins/adventure 前缀挂载）。
-func TestInventoryRoute(t *testing.T) {
+func TestMapRefreshAbortsRun(t *testing.T) {
+	env := setup(t)
+	env.adv.MapRefreshTicks = 2
+	p := env.newPet(t)
+	if _, err := env.adv.start(context.Background(), p.ID); err != nil {
+		t.Fatal(err)
+	}
+	env.clock.Advance(time.Minute)
+	env.engine.TickAll(context.Background())
+	env.clock.Advance(time.Minute)
+	env.engine.TickAll(context.Background())
+
+	if _, ok, _ := env.adv.getRun(p.ID); ok {
+		t.Fatal("run should be aborted on map refresh")
+	}
+	found := false
+	for _, typ := range env.sink.types() {
+		if typ == EventAborted {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("events = %v, want aborted", env.sink.types())
+	}
+}
+
+func TestRoutes(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t)
-	if err := AddItem(env.st.DB(), p.ID, "feather", 2); err != nil {
+	if _, err := env.adv.start(context.Background(), p.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,49 +207,66 @@ func TestInventoryRoute(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/v1/plugins/adventure/pets/" + p.ID + "/inventory")
+	resp, err := http.Get(ts.URL + "/v1/plugins/adventure/maps/current")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	var mapBody map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&mapBody); err != nil {
+		t.Fatal(err)
+	}
+	if mapBody["node_count"].(float64) != 6 {
+		t.Fatalf("map = %v", mapBody)
+	}
+
+	resp2, err := http.Get(ts.URL + "/v1/plugins/adventure/pets/" + p.ID + "/run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var runBody map[string]any
+	if err := json.NewDecoder(resp2.Body).Decode(&runBody); err != nil {
+		t.Fatal(err)
+	}
+	if runBody["adventuring"] != true {
+		t.Fatalf("run = %v", runBody)
+	}
+
+	// POST start 在已探险时拒绝
+	resp3, err := http.Post(ts.URL+"/v1/plugins/adventure/pets/"+p.ID+"/start", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusConflict {
+		t.Fatalf("re-start status = %d", resp3.StatusCode)
+	}
+}
+
+func TestStartHTTP(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t)
+	hub := api.NewHub()
+	ag := agent.New(env.engine, env.fs, llm.Config{})
+	srv := api.NewServer(env.st, env.engine, hub, env.fs, ag, nil)
+	srv.RegisterPluginRoutes(env.adv.Name(), env.adv.Routes())
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/v1/plugins/adventure/pets/"+p.ID+"/start", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	items, _ := body["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("items = %v", body)
-	}
-	first, _ := items[0].(map[string]any)
-	if first["item"] != "feather" || first["count"] != 2.0 || first["label"] != "羽毛" {
-		t.Fatalf("item = %v", first)
-	}
-	if body["adventuring"] != false {
-		t.Fatalf("adventuring = %v", body["adventuring"])
-	}
-
-	// 未知宠物 404
-	resp2, err := http.Get(ts.URL + "/v1/plugins/adventure/pets/nope/inventory")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp2.Body.Close()
-	if resp2.StatusCode != 404 {
-		t.Fatalf("unknown pet status = %d", resp2.StatusCode)
-	}
-}
-
-// TestInventoryNoTable 验证背包表不存在时的优雅错误（adventure 未注册的场景）。
-func TestInventoryNoTable(t *testing.T) {
-	st, err := store.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	if _, err := Inventory(st.DB(), "p1"); !errors.Is(err, ErrNoInventory) {
-		t.Fatalf("Inventory = %v, want ErrNoInventory", err)
-	}
-	if err := TakeItem(st.DB(), "p1", "pinecone"); !errors.Is(err, ErrNoInventory) {
-		t.Fatalf("TakeItem = %v, want ErrNoInventory", err)
+	if body["adventuring"] != true {
+		t.Fatalf("body = %v", body)
 	}
 }

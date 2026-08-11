@@ -146,6 +146,35 @@ func (c *Client) Care(ctx context.Context, id, action string) (Pet, error) {
 	return p, nil
 }
 
+// AdventureRun 是探险行程快照（插件 HTTP）。
+type AdventureRun struct {
+	PetID       string `json:"pet_id"`
+	Adventuring bool   `json:"adventuring"`
+	MapID       string `json:"map_id,omitempty"`
+	NodeID      int    `json:"node_id,omitempty"`
+	NodeName    string `json:"node_name,omitempty"`
+	Branches    int    `json:"branches,omitempty"`
+	ChestsFound []int  `json:"chests_found,omitempty"`
+}
+
+// StartAdventure 让宠物出发探险（POST /v1/plugins/adventure/pets/{id}/start）。
+func (c *Client) StartAdventure(ctx context.Context, id string) (AdventureRun, error) {
+	var run AdventureRun
+	if err := c.do(ctx, http.MethodPost, "/v1/plugins/adventure/pets/"+id+"/start", "", &run); err != nil {
+		return run, err
+	}
+	return run, nil
+}
+
+// GetAdventureRun 查询宠物当前探险行程。
+func (c *Client) GetAdventureRun(ctx context.Context, id string) (AdventureRun, error) {
+	var run AdventureRun
+	if err := c.do(ctx, http.MethodGet, "/v1/plugins/adventure/pets/"+id+"/run", "", &run); err != nil {
+		return run, err
+	}
+	return run, nil
+}
+
 // Chat 发送一句话并取回完整回复（无 LLM 时服务端走降级文案，同样有回复）。
 func (c *Client) Chat(ctx context.Context, id, message string) (string, error) {
 	var body struct {

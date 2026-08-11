@@ -7,6 +7,7 @@ package plugins
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/lalolv/PocketPet/internal/config"
 	"github.com/lalolv/PocketPet/internal/plugin"
@@ -38,23 +39,30 @@ func Build(cfg config.Config) []plugin.Plugin {
 }
 
 func applyAdventure(a *adventure.Adventure, c config.AdventurePluginConfig) {
-	if c.Ticks != nil && *c.Ticks > 0 {
-		a.Ticks = *c.Ticks
+	if c.MapRefreshTicks != nil && *c.MapRefreshTicks > 0 {
+		a.MapRefreshTicks = *c.MapRefreshTicks
+	}
+	if c.NodeCount != nil && *c.NodeCount > 0 {
+		a.NodeCount = *c.NodeCount
+	}
+	if c.MaxBranches != nil && *c.MaxBranches > 0 {
+		a.MaxBranches = *c.MaxBranches
+	}
+	if c.ChestMinPct != nil {
+		a.ChestMinPct = *c.ChestMinPct
+	}
+	if c.ChestMaxPct != nil {
+		a.ChestMaxPct = *c.ChestMaxPct
 	}
 	if c.EnergyCost != nil {
 		a.EnergyCost = *c.EnergyCost
 	}
-	if c.EXPReward != nil {
-		a.EXPReward = *c.EXPReward
-	}
-	if c.HappyReward != nil {
-		a.HappyReward = *c.HappyReward
-	}
-	if c.InjuryChance != nil {
-		a.InjuryChance = *c.InjuryChance
-	}
-	if c.InjuryHealth != nil {
-		a.InjuryHealth = *c.InjuryHealth
+	if c.StepIntervalSeconds != nil {
+		if *c.StepIntervalSeconds <= 0 {
+			a.StepInterval = 0
+		} else {
+			a.StepInterval = time.Duration(*c.StepIntervalSeconds) * time.Second
+		}
 	}
 }
 
@@ -73,8 +81,5 @@ func applyFriends(f *friends.Friends, c config.FriendsPluginConfig) {
 	}
 	if c.GiftHappy != nil {
 		f.GiftHappy = *c.GiftHappy
-	}
-	if c.AdventureAffinity != nil {
-		f.AdventureAffinity = *c.AdventureAffinity
 	}
 }

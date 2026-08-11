@@ -1,6 +1,6 @@
 // pocketpet-tui 是 PocketPet 的终端互动客户端：
 // 连接 pocketpetd（REST + SSE），提供选宠/创建、ASCII 精灵动画、
-// 照顾动作、聊天与事件日志。
+// 照顾动作、探险、聊天与事件日志。
 package main
 
 import (

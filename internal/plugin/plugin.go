@@ -171,7 +171,8 @@ func (c PluginContext) AppendJournal(id, text string, now time.Time) error {
 // 约定（契约，非强制沙箱）：
 //   - 只读写本插件 SchemaProvider 声明的表；
 //   - 禁止改写 CoreTables（pets / pet_events / kv_meta）；宠物数值与事件走 AdjustStats/Care/Emit；
-//   - 跨插件共享数据须经对方导出的包级 API（如 adventure.TakeItem），勿直接 SQL 耦合他插件表。
+//   - 跨插件共享数据默认禁止；确需协作须经对方导出的包级 API，勿直接 SQL 耦合他插件表。
+//     玩法插件应彼此独立（见 docs/06）。
 //
 // SQLite 无独立 schema 命名空间，故以约定 + 迁移版本隔离（plugin:<name>）代替物理隔离。
 func (c PluginContext) DB() *sql.DB { return c.db }

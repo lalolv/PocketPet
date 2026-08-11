@@ -153,6 +153,17 @@ func (m model) renderMain() string {
 	if m.pet.Sleeping {
 		header += "（睡觉中）"
 	}
+	if m.adventuring {
+		loc := m.advNode
+		if loc == "" {
+			loc = "路上"
+		}
+		header += fmt.Sprintf("（探险中·%s", loc)
+		if m.advChests > 0 {
+			header += fmt.Sprintf("·宝箱×%d", m.advChests)
+		}
+		header += "）"
+	}
 	if !m.pet.Alive {
 		header += " †"
 	}
@@ -195,7 +206,7 @@ func (m model) renderMain() string {
 	} else if !m.pet.Alive {
 		b.WriteString(faintStyle.Render("[r] 刷新    [q] 退出") + "\n")
 	} else {
-		b.WriteString(faintStyle.Render("[f]喂食 [p]玩耍 [c]清洁 [s]睡觉 [w]叫醒 [t]聊天 [r]刷新 [q]退出") + "\n")
+		b.WriteString(faintStyle.Render("[f]喂食 [p]玩耍 [c]清洁 [a]探险 [s]睡觉 [w]叫醒 [t]聊天 [r]刷新 [q]退出") + "\n")
 	}
 	return b.String()
 }
@@ -218,6 +229,8 @@ func (m model) renderSprite() string {
 			frame = sp.Play[m.frame%len(sp.Play)]
 		case animClean:
 			frame = sp.Clean[m.frame%len(sp.Clean)]
+		case animAdventure:
+			frame = sp.Play[m.frame%len(sp.Play)]
 		default:
 			frame = sp.Idle[m.frame%len(sp.Idle)]
 		}
@@ -238,6 +251,18 @@ func (m model) renderSprite() string {
 		}
 		lines = append([]string{sparkle}, append(lines, sparkle)...)
 	}
+	// 探险中：顶部滚动地图路径，底部提示。
+	if m.action == animAdventure || m.adventuring {
+		banner := adventurePathBanner(m.frame)
+		footer := "→ 探险中"
+		if m.advNode != "" {
+			footer = "→ " + m.advNode
+		}
+		if m.advChests > 0 {
+			footer += fmt.Sprintf(" ★×%d", m.advChests)
+		}
+		lines = append([]string{banner}, append(lines, footer)...)
+	}
 	// 低属性提示装饰。
 	if m.pet.Alive {
 		if d := decorations(m.pet); d != "" {
@@ -253,6 +278,19 @@ func (m model) renderSprite() string {
 		lines[i] = "  " + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// adventurePathBanner 探险路径滚动条（表现层动画）。
+func adventurePathBanner(frame int) string {
+	paths := []string{
+		"· → · · ◆ · ·",
+		"· · → · ◆ · ·",
+		"· · · → ◆ · ·",
+		"· · · · → ★ ·",
+		"· · · · ◆ → ·",
+		"★ · · · ◆ · →",
+	}
+	return paths[frame%len(paths)]
 }
 
 // face 是表情（眼睛 3 字符 + 嘴 1 字符）。

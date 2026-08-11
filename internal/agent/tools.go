@@ -47,8 +47,9 @@ type statusResult struct {
 	Status string `json:"status" jsonschema:"我当前的身体感受（定性描述，不含数值）"`
 }
 
-// buildTools 装配某只宠物的全部工具：自我行为（包装 tick.Engine 的 care 动作，
-// 与 REST care 同一领域路径）+ 记忆工具（remember/recall，落到 petfs）。
+// buildTools 装配某只宠物的全部工具：自我行为 + 记忆工具（remember/recall，落到 petfs）。
+// 自我行为只开放 sleep/wake（包装 tick.Engine 的 care 动作，与 REST care 同一领域路径）；
+// 喂食/玩耍/清洁是主人专属的照顾动作（care 通道），宠物只能表达需求，见 INSTRUCTIONS.md。
 func (a *PetAgent) buildTools(petID string) ([]adktool.Tool, error) {
 	var tools []adktool.Tool
 	add := func(t adktool.Tool, err error) error {
@@ -66,19 +67,10 @@ func (a *PetAgent) buildTools(petID string) ([]adktool.Tool, error) {
 			}))
 	}
 
-	if err := care("eat", "自己吃点东西（第一人称的进食，效果等同主人照顾动作 feed）。需要醒着。", pet.ActionFeed); err != nil {
-		return nil, err
-	}
-	if err := care("play", "自己玩耍一会儿：心情变好，但消耗精力和体力。需要醒着且精力足够。", pet.ActionPlay); err != nil {
-		return nil, err
-	}
 	if err := care("sleep", "自己去睡觉：睡着后精力会慢慢恢复。已经在睡时会失败。", pet.ActionSleep); err != nil {
 		return nil, err
 	}
 	if err := care("wake", "自己醒过来。醒着时用它会失败。", pet.ActionWake); err != nil {
-		return nil, err
-	}
-	if err := care("clean_up", "自己清洁身体（效果等同主人照顾动作 clean）。", pet.ActionClean); err != nil {
 		return nil, err
 	}
 
@@ -185,14 +177,9 @@ func domainErrText(err error) string {
 }
 
 // actionOutcome 描述动作完成后的状态（定性词汇，供 LLM 组织第一人称语言）。
+// 自我行为工具只有 sleep/wake，其余照顾动作是主人专属，不走这里。
 func actionOutcome(action pet.Action, p *pet.Pet) string {
 	switch action {
-	case pet.ActionFeed:
-		return fmt.Sprintf("吃了东西。现在饱食感：%s；清洁度：%s", levelWord(p.Stats.Hunger), levelWord(p.Stats.Clean))
-	case pet.ActionPlay:
-		return fmt.Sprintf("玩了一阵子。现在心情：%s；精力：%s；饱食感：%s", levelWord(p.Stats.Happy), levelWord(p.Stats.Energy), levelWord(p.Stats.Hunger))
-	case pet.ActionClean:
-		return fmt.Sprintf("洗干净了。现在清洁度：%s", levelWord(p.Stats.Clean))
 	case pet.ActionSleep:
 		return "我睡着了"
 	case pet.ActionWake:

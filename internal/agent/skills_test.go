@@ -115,7 +115,7 @@ func TestSkillMountedAndHotReloaded(t *testing.T) {
 		t.Fatalf("global skill not in instruction:\n%s", ins)
 	}
 	names := fake.toolNames()
-	for _, want := range []string{"eat", "play", "sleep", "remember", "recall", "list_skills", "load_skill"} {
+	for _, want := range []string{"sleep", "wake", "remember", "recall", "get_own_status", "list_skills", "load_skill"} {
 		if !containsStr(names, want) {
 			t.Fatalf("tool %q missing, tools = %v", want, names)
 		}

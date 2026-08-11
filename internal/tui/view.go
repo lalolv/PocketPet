@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 // 样式。
@@ -14,6 +15,40 @@ var (
 	faintStyle  = lipgloss.NewStyle().Faint(true)
 	inputStyle  = lipgloss.NewStyle().Bold(true)
 )
+
+// logWrapWidth 返回日志区的软换行宽度；尚未拿到终端宽度时不换行。
+func (m model) logWrapWidth() int {
+	if m.width <= 2 {
+		return 0
+	}
+	return m.width - 2
+}
+
+// wrapText 按显示宽度把文本软换行（CJK 字符按双宽计），保留原有硬换行。
+// bubbletea 标准渲染器会把超出终端宽度的行直接裁掉，长回复必须先换行再输出。
+// width <= 0 表示不换行。
+func wrapText(s string, width int) []string {
+	if width <= 0 {
+		return strings.Split(s, "\n")
+	}
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		var b strings.Builder
+		w := 0
+		for _, r := range para {
+			rw := runewidth.RuneWidth(r)
+			if w+rw > width && b.Len() > 0 {
+				lines = append(lines, b.String())
+				b.Reset()
+				w = 0
+			}
+			b.WriteRune(r)
+			w += rw
+		}
+		lines = append(lines, b.String())
+	}
+	return lines
+}
 
 // View 实现 tea.Model。
 func (m model) View() tea.View {
@@ -104,17 +139,27 @@ func (m model) renderMain() string {
 	statsBlock := renderStats(m.pet)
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, spriteBlock, "   ", statsBlock) + "\n")
 
-	// 日志区
+	// 日志区（长行按终端宽度软换行，避免被渲染器裁掉右侧）
 	b.WriteString(faintStyle.Render("── 日志 "+strings.Repeat("─", 12)) + "\n")
 	if len(m.logs) == 0 {
 		b.WriteString(faintStyle.Render("（还没有消息）") + "\n")
 	}
 	for _, l := range m.logs {
-		b.WriteString(l + "\n")
+		for _, wl := range wrapText(l, m.logWrapWidth()) {
+			b.WriteString(wl + "\n")
+		}
 	}
 	// 流式回复：未收到的部分以光标占位。
 	if m.streaming {
-		b.WriteString(inputStyle.Render("[" + m.pet.Name + "]: " + m.streamBuf + "▌") + "\n")
+		line := "[" + m.pet.Name + "]: " + m.streamBuf + "▌"
+		wrapped := wrapText(line, m.logWrapWidth())
+		for i, wl := range wrapped {
+			if i == len(wrapped)-1 {
+				b.WriteString(inputStyle.Render(wl) + "\n")
+			} else {
+				b.WriteString(wl + "\n")
+			}
+		}
 	}
 
 	// 底部帮助 / 输入行

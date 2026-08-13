@@ -2,6 +2,7 @@ package adventure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/plugin"
 )
 
@@ -38,16 +40,6 @@ func (a *Adventure) initTools() error {
 }
 
 func (a *Adventure) start(ctx context.Context, petID string) (plugin.ToolResult, error) {
-	p, err := a.ctx.GetPet(ctx, petID)
-	if err != nil {
-		return plugin.ToolResult{}, err
-	}
-	if p.Sleeping {
-		return plugin.ToolResult{OK: false, Outcome: "我正在睡觉，没法出门探险"}, nil
-	}
-	if p.Stats.Energy < a.EnergyCost {
-		return plugin.ToolResult{OK: false, Outcome: "我太累了，没力气去探险"}, nil
-	}
 	if _, ok, err := a.getRun(petID); err != nil {
 		return plugin.ToolResult{}, err
 	} else if ok {
@@ -59,24 +51,65 @@ func (a *Adventure) start(ctx context.Context, petID string) (plugin.ToolResult,
 		return plugin.ToolResult{OK: false, Outcome: "现在没有探险地图，等等再来吧"}, nil
 	}
 
-	if _, err := a.ctx.AdjustStats(ctx, petID, pet.Stats{Energy: -a.EnergyCost}); err != nil {
-		return plugin.ToolResult{}, err
-	}
+	cost := a.EnergyCost
+	mapID := sm.ID
 	now := time.Now().UTC()
-	a.stepMu.Lock()
-	err = a.insertRun(ctx, Run{
-		PetID: petID, MapID: sm.ID, NodeID: 0, ChestsFound: []int{}, StartedAt: now,
+	var petName string
+
+	res, err := a.ctx.Apply(ctx, petID, petstate.Transition{
+		To: pet.ActivityAdventuring, Owner: "adventure", Reason: "start",
+		StatsDelta: pet.Stats{Energy: -cost},
+		Guards: []petstate.Guard{
+			func(before petstate.Snapshot) error {
+				petName = before.Name
+				if before.Stats.Energy < cost {
+					return errLowEnergy
+				}
+				return nil
+			},
+		},
+		OnCommit: func(ctx context.Context, _, _ petstate.Snapshot) error {
+			a.stepMu.Lock()
+			defer a.stepMu.Unlock()
+			return a.insertRun(ctx, Run{
+				PetID: petID, MapID: mapID, NodeID: 0, ChestsFound: []int{}, StartedAt: now,
+			})
+		},
 	})
-	a.stepMu.Unlock()
 	if err != nil {
 		return plugin.ToolResult{}, err
 	}
+	if !res.OK {
+		switch {
+		case errors.Is(res.Err, pet.ErrBusy), errors.Is(res.Err, pet.ErrAlready):
+			if res.Snapshot.Activity.Kind == pet.ActivitySleeping {
+				return plugin.ToolResult{OK: false, Outcome: "我正在睡觉，没法出门探险"}, nil
+			}
+			if res.Snapshot.Stats.Energy < pet.AlertWarn {
+				return plugin.ToolResult{OK: false, Outcome: "我太困了，走不动，想先睡一觉"}, nil
+			}
+			return plugin.ToolResult{OK: false, Outcome: "我现在忙着，出不了门探险"}, nil
+		case errors.Is(res.Err, errLowEnergy):
+			return plugin.ToolResult{OK: false, Outcome: "我太累了，没力气去探险"}, nil
+		default:
+			if res.Err != nil {
+				return plugin.ToolResult{OK: false, Outcome: res.Err.Error()}, nil
+			}
+			return plugin.ToolResult{OK: false, Outcome: "现在出不去"}, nil
+		}
+	}
+	name := petName
+	if name == "" {
+		name = res.Snapshot.Name
+	}
 	a.ctx.Emit(ctx, pet.Event{
 		PetID: petID, Type: EventStarted,
-		Message: p.Name + " 从【入口】出发去探险了", CreatedAt: now,
+		Message: name + " 从【入口】出发去探险了", CreatedAt: now,
 	})
 	return plugin.ToolResult{OK: true, Outcome: "我从入口出发去探险了！会沿着道路一步步前进"}, nil
 }
+
+var errLowEnergy = errors.New("low energy")
 
 func (a *Adventure) status(ctx context.Context, petID string) (plugin.ToolResult, error) {
 	var sb strings.Builder
@@ -100,4 +133,12 @@ func (a *Adventure) status(ctx context.Context, petID string) (plugin.ToolResult
 	fmt.Fprintf(&sb, "我正在【%s】，前方有 %d 条路可走，已经发现 %d 个宝箱。",
 		node.Name, branches, len(r.ChestsFound))
 	return plugin.ToolResult{OK: true, Outcome: strings.TrimSpace(sb.String())}, nil
+}
+
+func (a *Adventure) endRun(ctx context.Context, petID, reason string) error {
+	_ = a.deleteRun(ctx, petID)
+	_, err := a.ctx.Apply(ctx, petID, petstate.Transition{
+		To: pet.ActivityIdle, Owner: "adventure", Reason: reason,
+	})
+	return err
 }

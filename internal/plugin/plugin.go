@@ -21,6 +21,7 @@ import (
 
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/store"
 	"github.com/lalolv/PocketPet/internal/tick"
 )
@@ -148,6 +149,31 @@ func (c PluginContext) Care(ctx context.Context, id string, action pet.Action) (
 // 走与照顾动作相同的钳制、晋升与告警规则。
 func (c PluginContext) AdjustStats(ctx context.Context, id string, delta pet.Stats) (*pet.Pet, error) {
 	return c.engine.Adjust(ctx, id, delta)
+}
+
+// Activity 返回统一活动态（idle / sleeping / adventuring /…）。
+func (c PluginContext) Activity(ctx context.Context, id string) (string, error) {
+	return c.engine.Activity(ctx, id)
+}
+
+// View 返回 Settle 后的原子状态快照。
+func (c PluginContext) View(ctx context.Context, id string) (petstate.Snapshot, error) {
+	return c.engine.State().View(ctx, id)
+}
+
+// Apply 经 petstate.Manager 原子切换活动（插件主路径）。
+func (c PluginContext) Apply(ctx context.Context, id string, t petstate.Transition) (petstate.Result, error) {
+	return c.engine.State().Apply(ctx, id, t)
+}
+
+// RegisterActivity 注册玩法活动 Kind。
+func (c PluginContext) RegisterActivity(k petstate.ActivityKind) error {
+	return c.engine.State().RegisterKind(k)
+}
+
+// RestoreActivity 重启时对齐占用（不跑 CanEnter）。
+func (c PluginContext) RestoreActivity(ctx context.Context, id, kind, owner string) error {
+	return c.engine.State().Restore(ctx, id, kind, owner)
 }
 
 // Emit 把插件产生的领域事件落库并推送（pet_events 表 + SSE）。

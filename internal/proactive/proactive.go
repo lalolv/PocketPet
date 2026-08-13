@@ -7,7 +7,7 @@
 //
 // 主动消息依赖 LLM，未配置或调用失败时静默跳过（告警事件本身的固定文案仍会推送）；
 // 自动入睡/醒来不依赖 LLM。自动喂食/清洁刻意不做——照顾是主人的事，
-// 宠物只负责"开口说"。
+// 宠物只负责"开口说"。文案必须服从 narrate.Policy（复述 Snapshot / Apply 结果）。
 package proactive
 
 import (
@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/narrate"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/store"
 )
 
@@ -35,6 +37,7 @@ const (
 type CareEngine interface {
 	Care(ctx context.Context, id string, action pet.Action) (*pet.Pet, error)
 	ListPets(ctx context.Context) ([]*pet.Pet, error)
+	RequestSleep(ctx context.Context, id, reason string) (petstate.Result, error)
 }
 
 // Options 是主动行为的开关组（配置层默认值见 internal/config）。
@@ -63,67 +66,141 @@ type Monitor struct {
 	// Now 返回当前时间（事件时间戳）；nil 时用 time.Now。测试注入假时钟。
 	Now func() time.Time
 
-	mu      sync.Mutex
-	pending map[string]bool // 每只宠物的"处理中"标志，防并发触发
+	mu        sync.Mutex
+	pending   map[string]bool     // 每只宠物消息处理中（仅挡主动文案并发）
+	handling  map[string]string   // 正在处理的触发类型
+	msgQueue  map[string][]string // pending 期间到达的其它触发，处理完后补发文案
 }
 
 // NewMonitor 创建主动行为器。Engine 与 Emitter 需在 Engine 创建后接线。
 func NewMonitor(st *store.Store, fs *petfs.FS, cfg llm.Config, opts Options) *Monitor {
-	return &Monitor{st: st, fs: fs, cfg: cfg, opts: opts, pending: make(map[string]bool)}
+	return &Monitor{
+		st: st, fs: fs, cfg: cfg, opts: opts,
+		pending: make(map[string]bool), handling: make(map[string]string),
+		msgQueue: make(map[string][]string),
+	}
 }
 
-// Publish 实现 tick.EventSink。该方法在引擎的 petID 锁内被调用，必须即刻返回：
-// 实际处理（LLM 调用、Care 动作会再次取同一把锁）全部异步，同宠物去重。
+// Publish 实现 tick.EventSink。该方法在引擎的 petID 锁内被调用，必须即刻返回。
+// AutoSleep 与 LLM 文案解耦：同宠处理「饿了」消息时，「困了」仍会触发入睡，不会被 pending 丢掉。
 func (m *Monitor) Publish(e pet.Event) {
 	if !m.opts.Enabled {
 		return
 	}
 	switch e.Type {
 	case pet.EventHungry, pet.EventDirty, pet.EventSleepy, pet.EventSick, pet.EventSad, pet.EventWokeUp:
-		// 进入处理流程；各事件关联的动作由 handle 决定
 	default:
+		return
+	}
+
+	// 自动入睡：独立异步，不受消息 pending 影响（同 tick 多告警时原先会丢掉 sleepy）。
+	if e.Type == pet.EventSleepy && m.opts.AutoSleep {
+		petID := e.PetID
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), handleTimeout)
+			defer cancel()
+			_ = m.requestSleep(ctx, petID)
+		}()
+	}
+
+	if !m.opts.Messages {
 		return
 	}
 
 	m.mu.Lock()
 	if m.pending[e.PetID] {
+		m.enqueueMsgLocked(e.PetID, e.Type)
 		m.mu.Unlock()
 		return
 	}
 	m.pending[e.PetID] = true
+	m.handling[e.PetID] = e.Type
 	m.mu.Unlock()
 
 	go func() {
 		defer func() {
 			m.mu.Lock()
 			delete(m.pending, e.PetID)
+			delete(m.handling, e.PetID)
 			m.mu.Unlock()
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), handleTimeout)
 		defer cancel()
 		m.handle(ctx, e)
+		m.drainMsgQueue(ctx, e.PetID)
 	}()
 }
 
-// handle 同步处理一条触发事件（测试可直接调用；生产由 Publish 异步触发）：
-// 先生成并推送主动消息，再执行该事件关联的自动动作。
-func (m *Monitor) handle(ctx context.Context, e pet.Event) {
-	if m.opts.Messages {
-		text, err := m.compose(ctx, e)
-		if err != nil {
-			slog.Warn("proactive: compose message failed, skip", "pet", e.PetID, "trigger", e.Type, "err", err)
-		} else if text != "" {
-			m.emit(ctx, pet.Event{PetID: e.PetID, Type: pet.EventProactive, Message: text, CreatedAt: m.now()})
+// enqueueMsgLocked 排队后续触发：与正在处理的类型相同则忽略；队列内去重保序。
+func (m *Monitor) enqueueMsgLocked(petID, typ string) {
+	if m.handling[petID] == typ {
+		return
+	}
+	q := m.msgQueue[petID]
+	for _, t := range q {
+		if t == typ {
+			return
 		}
 	}
-	if e.Type == pet.EventSleepy && m.opts.AutoSleep {
-		m.care(ctx, e.PetID, pet.ActionSleep)
+	m.msgQueue[petID] = append(q, typ)
+}
+
+// drainMsgQueue 补发 pending 期间排队的主动文案（AutoSleep 已在 Publish 侧做过）。
+func (m *Monitor) drainMsgQueue(ctx context.Context, petID string) {
+	for {
+		m.mu.Lock()
+		q := m.msgQueue[petID]
+		if len(q) == 0 {
+			delete(m.msgQueue, petID)
+			m.mu.Unlock()
+			return
+		}
+		typ := q[0]
+		m.msgQueue[petID] = q[1:]
+		m.handling[petID] = typ
+		m.mu.Unlock()
+		m.handle(ctx, pet.Event{PetID: petID, Type: typ})
 	}
 }
 
-// OnTick 实现 tick.TickHook：每周期检查睡眠中的宠物是否睡饱，睡饱则自动醒来。
+// handle 同步处理一条触发事件（测试可直接调用；生产由 Publish 异步触发）。
+// sleepy 的 AutoSleep 在 Publish 已异步触发；此处再调一次以拿到 Effect 供文案（幂等）。
+func (m *Monitor) handle(ctx context.Context, e pet.Event) {
+	var sleepEffect narrate.Effect
+	if e.Type == pet.EventSleepy && m.opts.AutoSleep {
+		sleepEffect = m.requestSleep(ctx, e.PetID)
+	}
+	if !m.opts.Messages {
+		return
+	}
+	text, err := m.compose(ctx, e, sleepEffect)
+	if err != nil {
+		slog.Warn("proactive: compose message failed, skip", "pet", e.PetID, "trigger", e.Type, "err", err)
+	} else if text != "" {
+		m.emit(ctx, pet.Event{PetID: e.PetID, Type: pet.EventProactive, Message: text, CreatedAt: m.now()})
+	}
+}
+
+// EnsureAutoSleep 若宠物醒着且精力低于预警线，则立刻睡或排队 IntentSleep。
+// 供 tick 兜底与 Care/Adjust 后的即时补救；幂等。
+func (m *Monitor) EnsureAutoSleep(ctx context.Context, p *pet.Pet) {
+	if !m.opts.Enabled || !m.opts.AutoSleep || m.Engine == nil || p == nil || !p.Alive {
+		return
+	}
+	if p.Sleeping || p.Stats.Energy >= pet.AlertWarn {
+		return
+	}
+	_ = m.requestSleep(ctx, p.ID)
+}
+
+// OnTick 实现 tick.TickHook：
+// - AutoWake：睡饱自动醒来；
+// - AutoSleep：醒着且精力仍 < AlertWarn 时补一次入睡（边沿事件若曾丢失不会永远卡住）。
 func (m *Monitor) OnTick(ctx context.Context, _ time.Time) {
-	if !m.opts.Enabled || !m.opts.AutoWake || m.Engine == nil {
+	if !m.opts.Enabled || m.Engine == nil {
+		return
+	}
+	if !m.opts.AutoWake && !m.opts.AutoSleep {
 		return
 	}
 	pets, err := m.Engine.ListPets(ctx)
@@ -132,14 +209,19 @@ func (m *Monitor) OnTick(ctx context.Context, _ time.Time) {
 		return
 	}
 	for _, p := range pets {
-		if p.Alive && p.Sleeping && p.Stats.Energy >= wakeEnergyThreshold {
-			m.care(ctx, p.ID, pet.ActionWake)
+		if p == nil || !p.Alive {
+			continue
 		}
+		if m.opts.AutoWake && p.Sleeping && p.Stats.Energy >= wakeEnergyThreshold {
+			m.care(ctx, p.ID, pet.ActionWake)
+			continue
+		}
+		m.EnsureAutoSleep(ctx, p)
 	}
 }
 
 // compose 生成一条主动消息；LLM 未配置时返回空串（静默跳过）。
-func (m *Monitor) compose(ctx context.Context, e pet.Event) (string, error) {
+func (m *Monitor) compose(ctx context.Context, e pet.Event, sleepEffect narrate.Effect) (string, error) {
 	msger := m.Messager
 	if msger == nil {
 		cfg := m.resolveCfg(e.PetID)
@@ -157,19 +239,57 @@ func (m *Monitor) compose(ctx context.Context, e pet.Event) (string, error) {
 	if !p.Alive {
 		return "", nil
 	}
+	nctx := narrate.FromPet(p)
+	nctx.Effect = sleepEffect
+	if e.Type == pet.EventWokeUp {
+		if note, err := m.fs.ReadWakeNote(e.PetID); err == nil {
+			nctx.WakeNote = note
+		}
+	}
+	frame := narrate.Policy(e.Type, nctx)
+	if !frame.MaySpeak {
+		return "", nil
+	}
+
 	req := ComposeRequest{
 		Name: p.Name, Species: p.Species, Stage: string(p.Stage), Trigger: e.Type,
+		Frame: frame,
 	}
 	if s, err := m.fs.Read(e.PetID, petfs.FileSOUL); err == nil {
 		req.Soul = s
 	}
-	if e.Type == pet.EventWokeUp {
-		// 非消费式读取：便签仍留给醒来后的第一次对话。
-		if note, err := m.fs.ReadWakeNote(e.PetID); err == nil {
-			req.WakeNote = note
-		}
-	}
 	return msger.Compose(ctx, req)
+}
+
+// requestSleep 经状态管理器立刻睡或排队 IntentSleep，返回叙事用 Effect。
+func (m *Monitor) requestSleep(ctx context.Context, petID string) narrate.Effect {
+	if m.Engine == nil {
+		return narrate.EffectNone
+	}
+	res, err := m.Engine.RequestSleep(ctx, petID, "autosleep")
+	if err != nil {
+		slog.Warn("proactive: auto sleep failed", "pet", petID, "err", err)
+		return narrate.EffectNone
+	}
+	if res.Err != nil {
+		switch {
+		case errors.Is(res.Err, pet.ErrAlreadySleeping), errors.Is(res.Err, pet.ErrAlready),
+			errors.Is(res.Err, pet.ErrDead), errors.Is(res.Err, pet.ErrBusy):
+			slog.Debug("proactive: auto sleep rejected", "pet", petID, "err", res.Err)
+		default:
+			slog.Warn("proactive: auto sleep rejected", "pet", petID, "err", res.Err)
+		}
+		if res.Queued {
+			return narrate.EffectQueuedSleep
+		}
+		return narrate.EffectNone
+	}
+	if res.Queued {
+		slog.Info("proactive: auto sleep queued", "pet", petID)
+		return narrate.EffectQueuedSleep
+	}
+	slog.Info("proactive: auto sleep applied", "pet", petID)
+	return narrate.EffectSlept
 }
 
 // care 执行一次自动照顾动作。领域拒绝（已在睡/已醒/已死亡）多为与
@@ -182,7 +302,7 @@ func (m *Monitor) care(ctx context.Context, petID string, action pet.Action) {
 	switch {
 	case err == nil:
 		slog.Info("proactive: auto care applied", "pet", petID, "action", action)
-	case errors.Is(err, pet.ErrAlreadySleeping), errors.Is(err, pet.ErrNotSleeping), errors.Is(err, pet.ErrDead):
+	case errors.Is(err, pet.ErrAlreadySleeping), errors.Is(err, pet.ErrNotSleeping), errors.Is(err, pet.ErrDead), errors.Is(err, pet.ErrBusy):
 		slog.Debug("proactive: auto care rejected", "pet", petID, "action", action, "err", err)
 	default:
 		slog.Warn("proactive: auto care failed", "pet", petID, "action", action, "err", err)

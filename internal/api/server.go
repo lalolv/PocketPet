@@ -44,7 +44,7 @@ func NewServer(st *store.Store, engine *tick.Engine, hub *Hub, fs *petfs.FS, ag 
 		LegacyCreate: "instant",
 		mux: http.NewServeMux(), a2aHandlers: make(map[string]*a2aEntry)}
 	// 状态快照推送：结算/动作落库后经 hub 广播 SSE state 帧。
-	engine.SetStateSink(stateSink{hub})
+	engine.SetStateSink(stateSink{hub: hub, eng: engine})
 	s.mux.HandleFunc("POST /v1/pets", s.handleCreatePet)
 	s.mux.HandleFunc("POST /v1/pets/birth", s.handleBirthPet)
 	s.mux.HandleFunc("GET /v1/pets", s.handleListPets)
@@ -82,6 +82,8 @@ type petView struct {
 	Stage      pet.Stage `json:"stage"`
 	Sleeping   bool      `json:"sleeping"`
 	Alive      bool      `json:"alive"`
+	Activity   string    `json:"activity"` // idle | sleeping | adventuring | …
+	Intents    []string  `json:"intents,omitempty"`
 	Stats      statsView `json:"stats"`
 	BornAt     time.Time `json:"born_at"`
 	LastTickAt time.Time `json:"last_tick_at"`
@@ -98,6 +100,8 @@ type stateView struct {
 	Stage    pet.Stage `json:"stage"`
 	Sleeping bool      `json:"sleeping"`
 	Alive    bool      `json:"alive"`
+	Activity string    `json:"activity"`
+	Intents  []string  `json:"intents,omitempty"`
 	Stats    statsView `json:"stats"`
 }
 
@@ -114,24 +118,49 @@ func statsViewOf(p *pet.Pet) statsView {
 }
 
 // stateOf 从领域对象构造状态快照。
-func stateOf(p *pet.Pet) stateView {
-	return stateView{ID: p.ID, Stage: p.Stage, Sleeping: p.Sleeping, Alive: p.Alive, Stats: statsViewOf(p)}
+func stateOf(p *pet.Pet, activity string) stateView {
+	if activity == "" {
+		activity = pet.ActivityIdle
+		if p.Sleeping {
+			activity = pet.ActivitySleeping
+		}
+	}
+	return stateView{
+		ID: p.ID, Stage: p.Stage, Sleeping: p.Sleeping, Alive: p.Alive,
+		Activity: activity, Intents: append([]string(nil), p.Intents...), Stats: statsViewOf(p),
+	}
 }
 
 // stateSink 把 engine 的状态快照适配到 hub（实现 tick.StateSink）。
-type stateSink struct{ hub *Hub }
+type stateSink struct {
+	hub *Hub
+	eng *tick.Engine
+}
 
 // PublishState 实现 tick.StateSink。
-func (s stateSink) PublishState(p *pet.Pet) { s.hub.PublishState(stateOf(p)) }
+func (s stateSink) PublishState(p *pet.Pet) {
+	activity := pet.ActivityIdle
+	if s.eng != nil {
+		activity = s.eng.PeekActivity(p)
+	}
+	s.hub.PublishState(stateOf(p, activity))
+}
 
-func view(p *pet.Pet) petView {
+func (s *Server) view(p *pet.Pet) petView {
 	gs := p.GenesisStatus
 	if gs == "" {
 		gs = pet.GenesisReady
 	}
+	activity := pet.ActivityIdle
+	if s.engine != nil {
+		activity = s.engine.PeekActivity(p)
+	} else if p.Sleeping {
+		activity = pet.ActivitySleeping
+	}
 	return petView{
 		ID: p.ID, Name: p.Name, Species: p.Species, Stage: p.Stage,
-		Sleeping: p.Sleeping, Alive: p.Alive,
+		Sleeping: p.Sleeping, Alive: p.Alive, Activity: activity,
+		Intents: append([]string(nil), p.Intents...),
 		Stats:  statsViewOf(p),
 		BornAt: p.BornAt, LastTickAt: p.LastTickAt,
 		GenesisStatus: gs,
@@ -195,7 +224,7 @@ func (s *Server) handleCreatePet(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, fmt.Errorf("create pet files: %w", err))
 		return
 	}
-	v := view(p)
+	v := s.view(p)
 	v.Personality = per.Key
 	writeJSON(w, http.StatusCreated, v)
 }
@@ -224,7 +253,7 @@ func (s *Server) createPetViaBirth(w http.ResponseWriter, r *http.Request, req c
 		writeDomainError(w, err)
 		return
 	}
-	v := view(p)
+	v := s.view(p)
 	if per, err := s.fs.SoulTemplate(p.ID); err == nil {
 		v.Personality = per
 	}
@@ -273,7 +302,7 @@ func (s *Server) handleListPets(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]petView, 0, len(pets))
 	for _, p := range pets {
-		v := view(p)
+		v := s.view(p)
 		if per, err := s.fs.SoulTemplate(p.ID); err == nil {
 			v.Personality = per
 		}
@@ -289,7 +318,7 @@ func (s *Server) handleGetPet(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	v := view(p)
+	v := s.view(p)
 	if per, err := s.fs.SoulTemplate(p.ID); err == nil {
 		v.Personality = per
 	}
@@ -311,7 +340,7 @@ func (s *Server) handleCare(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, view(p))
+	writeJSON(w, http.StatusOK, s.view(p))
 }
 
 // handleEvents 是 SSE 流：先回放 pet_events 中最近 N 条事件，订阅后补发当前状态快照，
@@ -366,7 +395,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// 补发当前状态快照：客户端（含重连）立即拿到最新数值，不用等下一个 tick。
 	if p, err := s.engine.Settle(r.Context(), id); err == nil {
-		if err := send("state", 0, stateOf(p)); err != nil {
+		if err := send("state", 0, stateOf(p, s.engine.PeekActivity(p))); err != nil {
 			return
 		}
 	}

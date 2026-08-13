@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petstate"
 )
 
 // OnTick 实现 plugin.TickHook：只负责地图刷新计数（跟养成 tick）。
@@ -44,26 +45,35 @@ func (a *Adventure) advanceAllRuns(ctx context.Context, now time.Time) {
 func (a *Adventure) advanceRun(ctx context.Context, r Run, now time.Time) error {
 	sm, err := a.loadMap(ctx, r.MapID)
 	if err != nil {
-		_ = a.deleteRun(ctx, r.PetID)
+		_ = a.endRun(ctx, r.PetID, "bad-map")
 		return err
 	}
 	p, err := a.ctx.GetPet(ctx, r.PetID)
 	if err != nil || !p.Alive {
+		_ = a.endRun(ctx, r.PetID, "dead")
+		return a.deleteRun(ctx, r.PetID)
+	}
+	// 自愈：Activity 已非 adventuring 但仍有 run
+	if p.Activity != pet.ActivityAdventuring {
+		a.ctx.Emit(ctx, pet.Event{
+			PetID: r.PetID, Type: EventAborted,
+			Message:   p.Name + " 的探险中断了",
+			CreatedAt: now,
+		})
 		return a.deleteRun(ctx, r.PetID)
 	}
 
 	node, ok := nodeByID(sm.Graph, r.NodeID)
 	if !ok {
-		_ = a.deleteRun(ctx, r.PetID)
+		_ = a.endRun(ctx, r.PetID, "bad-node")
 		return fmt.Errorf("adventure: node %d missing", r.NodeID)
 	}
 
-	// 先结算当前节点宝箱（含刚出发停在入口后的第一步之前；入口通常无箱）。
 	if node.HasChest && !containsInt(r.ChestsFound, node.ID) {
 		r.ChestsFound = append(r.ChestsFound, node.ID)
 		a.ctx.Emit(ctx, pet.Event{
 			PetID: r.PetID, Type: EventChest,
-			Message: fmt.Sprintf("%s 在【%s】发现了一个宝箱！", p.Name, node.Name),
+			Message:   fmt.Sprintf("%s 在【%s】发现了一个宝箱！", p.Name, node.Name),
 			CreatedAt: now,
 		})
 		if err := a.updateRun(ctx, r); err != nil {
@@ -78,7 +88,11 @@ func (a *Adventure) advanceRun(ctx context.Context, r Run, now time.Time) error 
 			msg += fmt.Sprintf("，沿途发现了 %d 个宝箱", len(r.ChestsFound))
 		}
 		a.ctx.Emit(ctx, pet.Event{PetID: r.PetID, Type: EventFinished, Message: msg, CreatedAt: now})
-		return a.deleteRun(ctx, r.PetID)
+		_ = a.deleteRun(ctx, r.PetID)
+		_, _ = a.ctx.Apply(ctx, r.PetID, petstate.Transition{
+			To: pet.ActivityIdle, Owner: "adventure", Reason: "finished",
+		})
+		return nil
 	}
 
 	next := neighbors[a.IntN(len(neighbors))]

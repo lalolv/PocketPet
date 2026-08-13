@@ -105,8 +105,11 @@ func main() {
 	for _, h := range registry.TickHooks() {
 		engine.AddTickHook(h)
 	}
-	// 主动行为器的 tick 侧：睡饱自动醒来。
+	// 主动行为器的 tick 侧：睡饱自动醒来；Care/Adjust 后即时补 AutoSleep。
 	engine.AddTickHook(monitor)
+	engine.AddAfterMutate(func(ctx context.Context, p *pet.Pet) {
+		monitor.EnsureAutoSleep(ctx, p)
+	})
 
 	petAgent := agent.New(engine, pfs, llmCfg, agent.Options{
 		SkillsDir:  cfg.SkillsDir,

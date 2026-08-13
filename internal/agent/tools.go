@@ -11,6 +11,7 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
+	"github.com/lalolv/PocketPet/internal/narrate"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 )
@@ -122,7 +123,7 @@ func (a *PetAgent) buildTools(petID string) ([]adktool.Tool, error) {
 func (a *PetAgent) selfCare(ctx context.Context, petID string, action pet.Action) (careResult, error) {
 	p, err := a.engine.Care(ctx, petID, action)
 	if err != nil {
-		return careResult{OK: false, Outcome: domainErrText(err)}, nil
+		return careResult{OK: false, Outcome: domainErrText(err, p, action)}, nil
 	}
 	return careResult{OK: true, Outcome: actionOutcome(action, p)}, nil
 }
@@ -159,7 +160,7 @@ func (a *PetAgent) recall(petID, _ string) (recallResult, error) {
 }
 
 // domainErrText 把领域错误翻译成宠物第一人称表达的素材。
-func domainErrText(err error) string {
+func domainErrText(err error, p *pet.Pet, action pet.Action) string {
 	switch {
 	case errors.Is(err, pet.ErrSleeping):
 		return "我正在睡觉，做不了这个"
@@ -167,6 +168,11 @@ func domainErrText(err error) string {
 		return "我已经在睡觉了"
 	case errors.Is(err, pet.ErrNotSleeping):
 		return "我现在醒着，没在睡觉"
+	case errors.Is(err, pet.ErrBusy):
+		if action == pet.ActionSleep {
+			return narrate.SleepBusyOutcome(p)
+		}
+		return "我正在忙别的事，现在做不了"
 	case errors.Is(err, pet.ErrLowEnergy):
 		return "我太累了，实在玩不动"
 	case errors.Is(err, pet.ErrDead):
@@ -179,10 +185,16 @@ func domainErrText(err error) string {
 // actionOutcome 描述动作完成后的状态（定性词汇，供 LLM 组织第一人称语言）。
 // 自我行为工具只有 sleep/wake，其余照顾动作是主人专属，不走这里。
 func actionOutcome(action pet.Action, p *pet.Pet) string {
+	ctx := narrate.FromPet(p)
 	switch action {
 	case pet.ActionSleep:
+		ctx.Effect = narrate.EffectSlept
+		if f := narrate.Policy("care.sleep", ctx); f.Outcome != "" {
+			return f.Outcome
+		}
 		return "我睡着了"
 	case pet.ActionWake:
+		ctx.Effect = narrate.EffectWoke
 		return fmt.Sprintf("我醒了。现在精力：%s", levelWord(p.Stats.Energy))
 	default:
 		return "做完了"
@@ -192,15 +204,8 @@ func actionOutcome(action pet.Action, p *pet.Pet) string {
 // statusSnapshot 生成定性的状态描述（注入指令的快照与 get_own_status 共用）。
 // 刻意不含数值——宠物被要求用生命化的语言表达状态。
 func statusSnapshot(p *pet.Pet) string {
-	awake := "醒着"
-	if p.Sleeping {
-		awake = "正在睡觉"
-	}
-	return fmt.Sprintf(`- 成长阶段：%s（%s）
-- 当前：%s
-- 饱食感：%s；心情：%s；清洁度：%s；精力：%s；健康：%s
-- 总体感受：%s`,
-		stageLabel(p.Stage), p.Stage, awake,
+	return narrate.StatusBlock(p,
+		fmt.Sprintf("%s（%s）", stageLabel(p.Stage), p.Stage),
 		levelWord(p.Stats.Hunger), levelWord(p.Stats.Happy), levelWord(p.Stats.Clean),
 		levelWord(p.Stats.Energy), levelWord(p.Stats.Health),
 		moodPhrase(p))

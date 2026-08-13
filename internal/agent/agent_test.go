@@ -11,6 +11,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/llm"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/store"
 	"github.com/lalolv/PocketPet/internal/tick"
 )
@@ -314,5 +315,66 @@ func TestWakeNoteConsumedOnChat(t *testing.T) {
 	}
 	if note != "" {
 		t.Fatalf("wake note should be consumed by first chat, got %q", note)
+	}
+}
+
+// TestWakeNoteNotConsumedWhenEnergyBelowAlertWarn 回归：仍客观困着时不注入/不消费睡醒便签。
+func TestWakeNoteNotConsumedWhenEnergyBelowAlertWarn(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t, "团团", "quiet")
+	if _, err := env.agent.EnsureFiles(p); err != nil {
+		t.Fatal(err)
+	}
+	const body = "你刚睡了一觉。\n你做了一个梦：第七只小鸟。\n"
+	if err := env.fs.WriteWakeNote(p.ID, body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.engine.Adjust(context.Background(), p.ID, pet.Stats{Energy: -(100 - pet.AlertWarn + 5)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := env.engine.Settle(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stats.Energy >= pet.AlertWarn {
+		t.Fatalf("energy = %v, want below AlertWarn", got.Stats.Energy)
+	}
+
+	if _, err := env.agent.Chat(context.Background(), p.ID, "困了吗"); err != nil {
+		t.Fatal(err)
+	}
+	note, err := env.fs.ReadWakeNote(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(note, "第七只小鸟") {
+		t.Fatalf("wake note should remain unconsumed while sleepy, got %q", note)
+	}
+	ins, err := env.agent.assemble(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ins, "# 我刚睡醒") {
+		t.Fatalf("must not inject wake note while Energy<AlertWarn:\n%s", ins)
+	}
+}
+
+// TestAssembleIncludesChatConstraintWhenIntentSleep 回归：主对话注入叙事约束。
+func TestAssembleIncludesChatConstraintWhenIntentSleep(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t, "团团", "quiet")
+	_, err := env.engine.State().Apply(context.Background(), p.ID, petstate.Transition{
+		To: pet.ActivityAdventuring, Owner: "adventure",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = env.engine.RequestSleep(context.Background(), p.ID, "test")
+	ins, err := env.agent.assemble(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ins, "# 说话约束") || !strings.Contains(ins, "还没睡着") {
+		t.Fatalf("want ChatConstraint in assemble:\n%s", ins)
 	}
 }

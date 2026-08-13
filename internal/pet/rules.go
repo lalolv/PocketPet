@@ -61,11 +61,25 @@ var (
 	ErrNotSleeping = errors.New("pet is not sleeping")
 	// ErrLowEnergy 表示精力不足以玩耍。
 	ErrLowEnergy = errors.New("not enough energy to play")
+	// ErrBusy 表示宠物正被另一持续活动占用（如探险中不可入睡）。
+	ErrBusy = errors.New("pet is busy with another activity")
+	// ErrAlready 表示已处于目标活动态（Apply 非幂等）。
+	ErrAlready = errors.New("pet is already in the target activity")
 	// ErrIncubating 表示宠物仍在 MetaAgent 孵化中，尚不可照顾/对话。
 	ErrIncubating = errors.New("pet is still incubating")
 	// ErrNotIncubating 表示对非孵化状态宠物执行 finalize。
 	ErrNotIncubating = errors.New("pet is not incubating")
 )
+
+// 活动态（Alive 下互斥）：由 petstate.Manager 维护并持久化到 Pet.Activity。
+const (
+	ActivityIdle        = "idle"
+	ActivitySleeping    = "sleeping"
+	ActivityAdventuring = "adventuring"
+)
+
+// IntentSleep 是排队入睡意图（忙时入队，回 idle 后消费）。
+const IntentSleep = "sleep"
 
 // Action 是一个照顾动作。
 type Action string
@@ -204,16 +218,20 @@ func (p *Pet) CareTraits(action Action, now time.Time, traits Traits) ([]Event, 
 		p.Stats.Clean += cleanCleanGain
 		p.Stats.EXP += cleanEXP
 	case ActionSleep:
-		if p.Sleeping {
+		if p.Sleeping || p.Activity == ActivitySleeping {
 			return nil, ErrAlreadySleeping
 		}
-		p.Sleeping = true
+		p.Activity = ActivitySleeping
+		p.ActivityOwner = "core"
+		p.SyncSleepingFromActivity()
 		actionEvs = append(actionEvs, p.newEvent(EventFellAsleep, p.Name+" 睡着了", now))
 	case ActionWake:
-		if !p.Sleeping {
+		if !p.Sleeping && p.Activity != ActivitySleeping {
 			return nil, ErrNotSleeping
 		}
-		p.Sleeping = false
+		p.Activity = ActivityIdle
+		p.ActivityOwner = ""
+		p.SyncSleepingFromActivity()
 		actionEvs = append(actionEvs, p.newEvent(EventWokeUp, p.Name+" 醒来了", now))
 	default:
 		return nil, ErrUnknownAction

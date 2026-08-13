@@ -21,6 +21,7 @@ type Pet struct {
 	Stage         string `json:"stage"`
 	Sleeping      bool   `json:"sleeping"`
 	Alive         bool   `json:"alive"`
+	Activity      string `json:"activity"`
 	Personality   string `json:"personality"`
 	GenesisStatus string `json:"genesis_status"`
 	Stats         Stats  `json:"stats"`
@@ -62,6 +63,7 @@ type PetState struct {
 	Stage    string `json:"stage"`
 	Sleeping bool   `json:"sleeping"`
 	Alive    bool   `json:"alive"`
+	Activity string `json:"activity"`
 	Stats    Stats  `json:"stats"`
 }
 
@@ -305,6 +307,8 @@ func (c *Client) WatchEvents(ctx context.Context, id string, eventCh chan<- Even
 				case stateCh <- st:
 				case <-ctx.Done():
 					return false
+				default:
+					// 调用方未及时取走时丢弃，避免反压堵死 SSE 读循环。
 				}
 			}
 			return true
@@ -315,6 +319,7 @@ func (c *Client) WatchEvents(ctx context.Context, id string, eventCh chan<- Even
 			case eventCh <- ev:
 			case <-ctx.Done():
 				return false
+			default:
 			}
 		}
 		return true

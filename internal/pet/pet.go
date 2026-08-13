@@ -78,11 +78,17 @@ type Pet struct {
 	Stats   Stats      `json:"stats"`
 	Alerts  AlertState `json:"alerts"`
 
-	Sleeping bool `json:"sleeping"` // 睡眠中精力恢复，且不可 feed/play
+	Sleeping bool `json:"sleeping"` // 派生于 Activity==sleeping；读兼容，写经 petstate.Manager
 	Alive    bool `json:"alive"`    // Health 归零后死亡，此后 tick 与动作均不生效
 
 	// GenesisStatus 是 MetaAgent 孵化状态。空字符串视为 ready（兼容旧宠物）。
 	GenesisStatus string `json:"genesis_status,omitempty"`
+
+	// Activity / ActivityOwner / StateSeq / Intents 由 petstate.Manager 维护（持久化占用）。
+	Activity      string   `json:"activity,omitempty"`       // idle|sleeping|adventuring|…
+	ActivityOwner string   `json:"activity_owner,omitempty"` // "" | plugin name
+	StateSeq      uint64   `json:"state_seq,omitempty"`
+	Intents       []string `json:"intents,omitempty"` // 排队意图，如 "sleep"
 
 	BornAt     time.Time `json:"born_at"`
 	LastTickAt time.Time `json:"last_tick_at"` // 上次衰减结算时刻，离线补算的基准
@@ -91,6 +97,50 @@ type Pet struct {
 // Incubating 报告宠物是否仍在 MetaAgent 孵化中。
 func (p *Pet) Incubating() bool {
 	return p != nil && p.GenesisStatus == GenesisIncubating
+}
+
+// SyncSleepingFromActivity 让 Sleeping 与 Activity 一致（读兼容旧字段）。
+func (p *Pet) SyncSleepingFromActivity() {
+	if p == nil {
+		return
+	}
+	if p.Activity == "" {
+		if p.Sleeping {
+			p.Activity = ActivitySleeping
+		} else {
+			p.Activity = ActivityIdle
+		}
+	}
+	p.Sleeping = p.Activity == ActivitySleeping
+}
+
+// HasIntent 报告是否已排队某意图。
+func (p *Pet) HasIntent(kind string) bool {
+	for _, i := range p.Intents {
+		if i == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// AddIntent 排队意图（去重）。
+func (p *Pet) AddIntent(kind string) {
+	if p.HasIntent(kind) {
+		return
+	}
+	p.Intents = append(p.Intents, kind)
+}
+
+// RemoveIntent 移除排队意图。
+func (p *Pet) RemoveIntent(kind string) {
+	out := p.Intents[:0]
+	for _, i := range p.Intents {
+		if i != kind {
+			out = append(out, i)
+		}
+	}
+	p.Intents = out
 }
 
 // DefaultStats 是即时创建（非 MetaAgent）时的默认初始属性。
@@ -122,6 +172,7 @@ func NewWithStats(id, name, species string, stats Stats, now time.Time) *Pet {
 		Stage:      StageEgg,
 		Stats:      stats,
 		Alive:      true,
+		Activity:   ActivityIdle,
 		BornAt:     now,
 		LastTickAt: now,
 	}

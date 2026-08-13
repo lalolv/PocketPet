@@ -118,7 +118,8 @@ func TestVisitSleeping(t *testing.T) {
 	env := setup(t)
 	a := env.newPet(t, "雪球")
 	b := env.newPet(t, "团子")
-	b.Sleeping = true
+	b.Activity = pet.ActivitySleeping
+	b.SyncSleepingFromActivity()
 	if err := env.st.SavePet(context.Background(), b); err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +130,37 @@ func TestVisitSleeping(t *testing.T) {
 	}
 	if v := env.affinity(t, a.ID, b.ID); v != 2 {
 		t.Fatalf("affinity = %v, want 2", v)
+	}
+}
+
+func TestVisitSelfSleeping(t *testing.T) {
+	env := setup(t)
+	a := env.newPet(t, "雪球")
+	_ = env.newPet(t, "团子")
+	a.Activity = pet.ActivitySleeping
+	a.SyncSleepingFromActivity()
+	if err := env.st.SavePet(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	res, err := env.fr.visit(context.Background(), a.ID, "团子")
+	if err != nil || res.OK || !strings.Contains(res.Outcome, "睡觉") {
+		t.Fatalf("visit while self sleeping = %+v, %v", res, err)
+	}
+}
+
+func TestVisitSelfAdventuring(t *testing.T) {
+	env := setup(t)
+	a := env.newPet(t, "雪球")
+	_ = env.newPet(t, "团子")
+	a.Activity = pet.ActivityAdventuring
+	a.ActivityOwner = "adventure"
+	a.SyncSleepingFromActivity()
+	if err := env.st.SavePet(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	res, err := env.fr.visit(context.Background(), a.ID, "团子")
+	if err != nil || res.OK || !strings.Contains(res.Outcome, "出不了门") {
+		t.Fatalf("visit while self adventuring = %+v, %v", res, err)
 	}
 }
 

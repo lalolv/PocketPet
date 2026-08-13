@@ -2,11 +2,13 @@ package tick
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/store"
 )
 
@@ -250,4 +252,176 @@ type recordingHook struct {
 func (h *recordingHook) OnTick(_ context.Context, now time.Time) {
 	h.calls++
 	h.lastNow = now
+}
+
+func TestActivityOccupyBlocksSleep(t *testing.T) {
+	eng, _, _, _ := setup(t)
+	ctx := context.Background()
+
+	p, err := eng.CreatePet(ctx, "团团", "cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if act, err := eng.Activity(ctx, p.ID); err != nil || act != pet.ActivityIdle {
+		t.Fatalf("activity = %q, %v", act, err)
+	}
+	res, err := eng.State().Apply(ctx, p.ID, petstate.Transition{
+		To: pet.ActivityAdventuring, Owner: "adventure", Reason: "test",
+	})
+	if err != nil || res.Err != nil {
+		t.Fatalf("apply adventuring: %v %v", err, res.Err)
+	}
+	if act, err := eng.Activity(ctx, p.ID); err != nil || act != pet.ActivityAdventuring {
+		t.Fatalf("activity = %q, %v want adventuring", act, err)
+	}
+	if _, err := eng.Care(ctx, p.ID, pet.ActionSleep); !errors.Is(err, pet.ErrBusy) {
+		t.Fatalf("sleep while adventuring = %v, want ErrBusy", err)
+	}
+	// 回 idle 时消费 IntentSleep → 自动入睡
+	res, err = eng.State().GoIdle(ctx, p.ID, "end:test")
+	if err != nil || (res.Err != nil && !errors.Is(res.Err, pet.ErrAlready)) {
+		t.Fatalf("go idle: %v %v", err, res.Err)
+	}
+	if act, err := eng.Activity(ctx, p.ID); err != nil || act != pet.ActivitySleeping {
+		t.Fatalf("activity after end = %q, %v want sleeping", act, err)
+	}
+	res, err = eng.State().Apply(ctx, p.ID, petstate.Transition{
+		To: pet.ActivityAdventuring, Owner: "adventure", Reason: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(res.Err, pet.ErrBusy) {
+		t.Fatalf("adventure while sleeping = %v, want ErrBusy", res.Err)
+	}
+}
+
+// TestRunTicksImmediately 回归：Run 不得空等一个完整 interval 才首次结算。
+func TestRunTicksImmediately(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	clock := pet.NewFakeClock(t0)
+	eng := NewEngine(st, nil, time.Hour, 24*time.Hour, clock) // interval 很大，若空等则本测会超时失败语义上不触发
+	ctx := context.Background()
+	p, err := eng.CreatePet(ctx, "团团", "cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := p.Stats.Hunger
+	clock.Advance(time.Hour) // 待结算的衰减已积压；Run 首 Tick 应立刻吃掉
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go eng.Run(runCtx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := st.GetPet(ctx, p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Stats.Hunger < before && got.LastTickAt.After(t0) {
+			cancel()
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("Run should TickAll immediately on start")
+}
+
+// TestAfterMutateCareFeedTriggersAutoSleepWhenAlreadySleepy 回归：边沿已过仍困着时，喂食后经 AfterMutate 补睡。
+func TestAfterMutateCareFeedTriggersAutoSleepWhenAlreadySleepy(t *testing.T) {
+	eng, st, _, _ := setup(t)
+	ctx := context.Background()
+	p, err := eng.CreatePet(ctx, "团团", "cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetPet(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Stats.Energy = 20
+	got.Alerts.Sleepy = true
+	if err := st.SavePet(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+
+	eng.AddAfterMutate(func(ctx context.Context, p *pet.Pet) {
+		if p.Stats.Energy < pet.AlertWarn && !p.Sleeping {
+			_, _ = eng.RequestSleep(ctx, p.ID, "after-mutate")
+		}
+	})
+
+	if _, err := eng.Care(ctx, p.ID, pet.ActionFeed); err != nil {
+		t.Fatal(err)
+	}
+	act, err := eng.Activity(ctx, p.ID)
+	if err != nil || act != pet.ActivitySleeping {
+		t.Fatalf("activity = %q, %v want sleeping after feed+AfterMutate", act, err)
+	}
+}
+
+// TestAfterMutateAdjustTriggersAutoSleep 回归：Adjust 把精力打到预警下后也应补睡。
+func TestAfterMutateAdjustTriggersAutoSleep(t *testing.T) {
+	eng, _, _, _ := setup(t)
+	ctx := context.Background()
+	p, err := eng.CreatePet(ctx, "团团", "cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.AddAfterMutate(func(ctx context.Context, p *pet.Pet) {
+		if p.Stats.Energy < pet.AlertWarn && !p.Sleeping {
+			_, _ = eng.RequestSleep(ctx, p.ID, "after-adjust")
+		}
+	})
+	if _, err := eng.Adjust(ctx, p.ID, pet.Stats{Energy: -80}); err != nil { // 100→20
+		t.Fatal(err)
+	}
+	act, err := eng.Activity(ctx, p.ID)
+	if err != nil || act != pet.ActivitySleeping {
+		t.Fatalf("activity = %q, %v want sleeping", act, err)
+	}
+}
+
+// TestAfterMutateCanReenterWithoutDeadlock 回归：AfterMutate 在 unlock 后调用，可重入 RequestSleep。
+func TestAfterMutateCanReenterWithoutDeadlock(t *testing.T) {
+	eng, st, _, _ := setup(t)
+	ctx := context.Background()
+	p, err := eng.CreatePet(ctx, "团团", "cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetPet(ctx, p.ID)
+	got.Stats.Energy = 15
+	_ = st.SavePet(ctx, got)
+
+	done := make(chan struct{})
+	eng.AddAfterMutate(func(ctx context.Context, p *pet.Pet) {
+		_, _ = eng.RequestSleep(ctx, p.ID, "reenter")
+		close(done)
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := eng.Care(ctx, p.ID, pet.ActionClean)
+		errCh <- err
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("AfterMutate reentrant RequestSleep deadlocked")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Care did not return")
+	}
 }

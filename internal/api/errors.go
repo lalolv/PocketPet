@@ -42,6 +42,7 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	case errors.Is(err, pet.ErrSleeping),
 		errors.Is(err, pet.ErrAlreadySleeping),
 		errors.Is(err, pet.ErrNotSleeping),
+		errors.Is(err, pet.ErrBusy),
 		errors.Is(err, pet.ErrIncubating),
 		errors.Is(err, pet.ErrNotIncubating):
 		writeError(w, http.StatusConflict, codeInvalidState, err.Error())

@@ -214,6 +214,42 @@ func TestAdventureEventsDriveAnimation(t *testing.T) {
 	}
 }
 
+func TestActivityHeaderExclusive(t *testing.T) {
+	m := NewModel(NewClient("http://unused"))
+	m.screen = screenMain
+	m.pet = testPet()
+	m.adventuring = true
+	m.advNode = "地点2"
+	m.pet.Sleeping = true
+	m.pet.Activity = "sleeping" // Snapshot 为准：睡觉优先于本地 adventuring 标志
+	view := m.renderString()
+	if !strings.Contains(view, "睡觉中") {
+		t.Fatalf("want 睡觉中:\n%s", view)
+	}
+	if strings.Contains(view, "探险中") {
+		t.Fatalf("sleeping must not show 探险中:\n%s", view)
+	}
+
+	m.pet.Activity = "adventuring"
+	m.pet.Sleeping = false
+	view = m.renderString()
+	if !strings.Contains(view, "探险中") {
+		t.Fatalf("want 探险中:\n%s", view)
+	}
+	if strings.Contains(view, "睡觉中") {
+		t.Fatalf("adventuring must not show 睡觉中:\n%s", view)
+	}
+
+	m.stateCh = make(chan PetState, 1)
+	m = update(t, m, stateMsg(PetState{
+		ID: m.pet.ID, Stage: "egg", Sleeping: true, Alive: true, Activity: "sleeping",
+		Stats: m.pet.Stats,
+	}))
+	if m.adventuring {
+		t.Fatal("state activity=sleeping should clear adventuring")
+	}
+}
+
 func TestAdventureKeyStartsCmd(t *testing.T) {
 	m := NewModel(NewClient("http://unused"))
 	m.screen = screenMain

@@ -12,6 +12,8 @@ import (
 
 	adktool "google.golang.org/adk/v2/tool"
 
+	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/plugin"
 )
 
@@ -92,6 +94,33 @@ func (a *Adventure) Init(pctx plugin.PluginContext) error {
 	}
 	if err := a.initTools(); err != nil {
 		return err
+	}
+	if err := a.ctx.RegisterActivity(petstate.ActivityKind{
+		Name:  pet.ActivityAdventuring,
+		Owner: "adventure",
+	}); err != nil {
+		return err
+	}
+	// 重启：以 DB Activity 为准；有 run 则 Restore，无 Activity 有 run 则 Restore，有 Activity 无 run 则回 idle。
+	ctx := context.Background()
+	runs, err := a.listRuns()
+	if err != nil {
+		return err
+	}
+	runPets := map[string]bool{}
+	for _, r := range runs {
+		runPets[r.PetID] = true
+		if err := a.ctx.RestoreActivity(ctx, r.PetID, pet.ActivityAdventuring, "adventure"); err != nil {
+			a.ctx.Logger().Warn("adventure: restore failed, drop run", "pet", r.PetID, "err", err)
+			_ = a.deleteRun(ctx, r.PetID)
+		}
+	}
+	// 自愈：Activity 为 adventuring 但无 run
+	pets, _ := a.ctx.ListPets(ctx)
+	for _, p := range pets {
+		if p.Activity == pet.ActivityAdventuring && !runPets[p.ID] {
+			_, _ = a.ctx.Apply(ctx, p.ID, petstate.Transition{To: pet.ActivityIdle, Reason: "heal:no-run"})
+		}
 	}
 	a.startStepLoop()
 	return nil

@@ -159,6 +159,28 @@ func TestAlertEdgeTrigger(t *testing.T) {
 	assertEventTypes(t, evs, EventHungry)
 }
 
+// TestSleepyAlertEdgeTrigger 精力困顿同样是边沿：持续低精力不重复发 pet.sleepy。
+func TestSleepyAlertEdgeTrigger(t *testing.T) {
+	p := newTestPet()
+	p.Stats.Energy = 29
+	evs := p.refresh(t0)
+	assertEventTypes(t, evs, EventSleepy)
+	if !p.Alerts.Sleepy {
+		t.Fatal("want Sleepy flag")
+	}
+	evs = p.refresh(t0.Add(time.Minute))
+	for _, e := range evs {
+		if e.Type == EventSleepy {
+			t.Fatal("sleepy must not re-fire while still below warn")
+		}
+	}
+	p.Stats.Energy = 50
+	_ = p.refresh(t0.Add(2 * time.Minute))
+	if p.Alerts.Sleepy {
+		t.Fatal("Sleepy flag should clear when energy recovers")
+	}
+}
+
 func TestStageUp(t *testing.T) {
 	p := newTestPet()
 	p.Stats.EXP = 28

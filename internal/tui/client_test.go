@@ -199,19 +199,24 @@ func TestClientWatchEvents(t *testing.T) {
 		t.Fatal("no state snapshot")
 	}
 
-	// 实时事件：推假时钟 14h（饱食度 70→28 跌破预警线），GetPet 触发结算 → pet.hungry
-	ts.clock.Advance(14 * time.Hour)
+	// 实时事件：推假时钟足够久，确保即使用性格修饰衰减也能跌破饥饿线。
+	ts.clock.Advance(24 * time.Hour)
 	if _, err := c.GetPet(ctx, p.ID); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case ev := <-evCh:
-		if ev.Type != "pet.hungry" || ev.Message == "" {
-			t.Fatalf("event = %+v", ev)
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ev := <-evCh:
+			if ev.Type == "pet.hungry" && ev.Message != "" {
+				goto gotHungry
+			}
+		case <-stCh: // 排空状态帧，避免干扰
+		case <-deadline:
+			t.Fatal("no hungry event")
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("no hungry event")
 	}
+gotHungry:
 
 	// ctx 取消后 WatchEvents 返回 nil
 	cancel()

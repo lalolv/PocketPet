@@ -150,10 +150,23 @@ func (m model) renderMain() string {
 	status := moodWord(m.pet)
 	header := fmt.Sprintf(" %s · %s · %s · %s · %s",
 		m.pet.Name, m.pet.Species, stageLabel(m.pet.Stage), personalityLabel(m.pet.Personality), status)
-	if m.pet.Sleeping {
-		header += "（睡觉中）"
+	// 活动态互斥展示：只跟 Snapshot.Activity（死亡 > sleeping > adventuring）。
+	act := m.pet.Activity
+	if act == "" {
+		if m.pet.Sleeping {
+			act = "sleeping"
+		} else if m.adventuring {
+			act = "adventuring"
+		} else {
+			act = "idle"
+		}
 	}
-	if m.adventuring {
+	switch {
+	case !m.pet.Alive:
+		header += " †"
+	case act == "sleeping":
+		header += "（睡觉中）"
+	case act == "adventuring":
 		loc := m.advNode
 		if loc == "" {
 			loc = "路上"
@@ -163,9 +176,6 @@ func (m model) renderMain() string {
 			header += fmt.Sprintf("·宝箱×%d", m.advChests)
 		}
 		header += "）"
-	}
-	if !m.pet.Alive {
-		header += " †"
 	}
 	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(faintStyle.Render(strings.Repeat("─", max(20, m.width/2))) + "\n")

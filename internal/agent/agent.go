@@ -26,6 +26,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/adkx"
 	"github.com/lalolv/PocketPet/internal/config"
 	"github.com/lalolv/PocketPet/internal/llm"
+	"github.com/lalolv/PocketPet/internal/narrate"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
 	"github.com/lalolv/PocketPet/internal/tick"
@@ -159,10 +160,9 @@ func (a *PetAgent) run(ctx context.Context, petID, message string, streaming boo
 			// 文件缺失不阻断对话（指令装配会容忍缺文件），只记录。
 			slog.Warn("agent: ensure petfs files failed", "pet", petID, "err", err)
 		}
-		// 醒来后的第一次对话：消费"睡醒便签"（梦境整理器在入睡时写入），
-		// 注入本次指令让宠物自然提及刚睡的觉/做的梦。降级路径不展示便签，
-		// 便签内容仍留在日记里，可被 recall 找到。
-		if !p.Sleeping {
+		// 醒来后的第一次对话：消费"睡醒便签"。仍客观困着（精力<预警）时不注入，
+		// 避免「UI 显示困了、嘴上说刚醒做了梦」的撕裂。
+		if !p.Sleeping && p.Stats.Energy >= pet.AlertWarn {
 			if note, err := a.fs.TakeWakeNote(petID); err == nil && note != "" {
 				a.mu.Lock()
 				a.wakeNotes[petID] = note
@@ -357,6 +357,7 @@ func (a *PetAgent) assemble(ctx context.Context, petID string) (string, error) {
 	// 状态快照：Settle 触发补算后读取，保证是当前时刻的状态。
 	if p, err := a.engine.Settle(ctx, petID); err == nil {
 		write("# 我现在的状态", statusSnapshot(p))
+		write("# 说话约束", narrate.ChatConstraint(p))
 	}
 	// 睡醒便签（仅醒来后的第一次对话存在）。
 	a.mu.Lock()

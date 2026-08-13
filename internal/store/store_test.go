@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,8 +29,11 @@ func TestSaveGetRoundTrip(t *testing.T) {
 
 	p := pet.New("p1", "团团", "cat", t0)
 	p.Stats.Hunger = 66.5 // 确认小数衰减值在快照中不丢失
-	p.Sleeping = true
+	p.Activity = pet.ActivitySleeping
+	p.SyncSleepingFromActivity()
 	p.Alerts.Hungry = true
+	p.Intents = []string{pet.IntentSleep}
+	p.StateSeq = 3
 	if err := s.SavePet(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +42,7 @@ func TestSaveGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *got != *p {
+	if !reflect.DeepEqual(got, p) {
 		t.Fatalf("got %+v, want %+v", got, p)
 	}
 }

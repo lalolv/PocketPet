@@ -392,8 +392,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pet.Stage = st.Stage
 			m.pet.Sleeping = st.Sleeping
 			m.pet.Alive = st.Alive
+			m.pet.Activity = st.Activity
 			m.pet.Stats = st.Stats
 			m.petLoading = false
+			// 以服务端活动态为准，避免本地 adventuring 与 sleeping 叠加。
+			m.adventuring = st.Activity == "adventuring"
 		}
 		return m, waitStateCmd(m.stateCh)
 
@@ -582,6 +585,10 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.pet.Sleeping {
 			m.logf("· 睡觉时没法出门探险")
+			return m, nil
+		}
+		if m.pet.Stats.Energy < alertWarn {
+			m.logf("· 太困了，走不动（先睡一觉吧）")
 			return m, nil
 		}
 		m.action, m.frame = animAdventure, 0

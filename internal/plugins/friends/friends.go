@@ -136,6 +136,17 @@ func (f *Friends) visit(ctx context.Context, petID, friendName string) (plugin.T
 	}
 	now := time.Now()
 
+	if self.Sleeping {
+		return plugin.ToolResult{OK: false, Outcome: "我在睡觉，出不了门"}, nil
+	}
+	act := self.Activity
+	if act == "" {
+		act = pet.ActivityIdle
+	}
+	if act != pet.ActivityIdle {
+		return plugin.ToolResult{OK: false, Outcome: "我现在出不了门"}, nil
+	}
+
 	if friend.Sleeping {
 		if err := f.bumpAffinity(ctx, self.ID, friend.ID, f.PeekAffinity); err != nil {
 			return plugin.ToolResult{}, err
@@ -166,6 +177,16 @@ func (f *Friends) gift(ctx context.Context, petID, friendName, item string) (plu
 	item = strings.TrimSpace(item)
 	if item == "" {
 		return plugin.ToolResult{OK: false, Outcome: "我得想好送什么呀"}, nil
+	}
+	if self.Sleeping {
+		return plugin.ToolResult{OK: false, Outcome: "我在睡觉，没法送礼"}, nil
+	}
+	act := self.Activity
+	if act == "" {
+		act = pet.ActivityIdle
+	}
+	if act != pet.ActivityIdle {
+		return plugin.ToolResult{OK: false, Outcome: "我现在没法送礼"}, nil
 	}
 
 	if err := f.bumpAffinity(ctx, self.ID, friend.ID, f.GiftAffinity); err != nil {

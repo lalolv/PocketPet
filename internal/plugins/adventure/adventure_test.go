@@ -3,6 +3,7 @@ package adventure
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -147,23 +148,152 @@ func TestStartRejected(t *testing.T) {
 	env := setup(t)
 	p := env.newPet(t)
 
-	p.Stats.Energy = 10
+	// 精力低于「困了」阈值：禁止出门（优先于单纯 cost 检查）。
+	p.Stats.Energy = 25
 	if err := env.st.SavePet(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	res, err := env.adv.start(context.Background(), p.ID)
-	if err != nil || res.OK || !strings.Contains(res.Outcome, "太累") {
-		t.Fatalf("low energy = %+v, %v", res, err)
+	if err != nil || res.OK || !strings.Contains(res.Outcome, "太困") {
+		t.Fatalf("sleepy = %+v, %v", res, err)
 	}
 
 	p.Stats.Energy = 100
-	p.Sleeping = true
+	p.Activity = pet.ActivitySleeping
+	p.SyncSleepingFromActivity()
 	if err := env.st.SavePet(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	res, err = env.adv.start(context.Background(), p.ID)
 	if err != nil || res.OK || !strings.Contains(res.Outcome, "睡觉") {
 		t.Fatalf("sleeping = %+v, %v", res, err)
+	}
+}
+
+func TestSleepWhileAdventuringQueuesThenSleepsOnFinish(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t)
+	if _, err := env.adv.start(context.Background(), p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if act, err := env.engine.Activity(context.Background(), p.ID); err != nil || act != pet.ActivityAdventuring {
+		t.Fatalf("activity = %q, %v", act, err)
+	}
+	if _, err := env.engine.Care(context.Background(), p.ID, pet.ActionSleep); !errors.Is(err, pet.ErrBusy) {
+		t.Fatalf("care sleep = %v, want ErrBusy", err)
+	}
+	got, _ := env.st.GetPet(context.Background(), p.ID)
+	if !got.HasIntent(pet.IntentSleep) {
+		t.Fatal("want IntentSleep queued")
+	}
+
+	finished := false
+	for i := 0; i < 20; i++ {
+		env.adv.advanceAllRuns(context.Background(), env.clock.Now())
+		if _, ok, _ := env.adv.getRun(p.ID); !ok {
+			finished = true
+			break
+		}
+	}
+	if !finished {
+		t.Fatal("run did not finish")
+	}
+	if act, err := env.engine.Activity(context.Background(), p.ID); err != nil || act != pet.ActivitySleeping {
+		t.Fatalf("activity after finish = %q, %v want sleeping", act, err)
+	}
+}
+
+// TestConcurrentStartDeductsEnergyOnce 回归：并发 adventure_start 只成功一次、精力只扣一档。
+func TestConcurrentStartDeductsEnergyOnce(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t)
+	before, err := env.st.GetPet(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEnergy := before.Stats.Energy - env.adv.EnergyCost
+
+	const n = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	okN := 0
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := env.adv.start(context.Background(), p.ID)
+			if err != nil {
+				t.Errorf("start err: %v", err)
+				return
+			}
+			if res.OK {
+				mu.Lock()
+				okN++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if okN != 1 {
+		t.Fatalf("ok starts = %d, want 1", okN)
+	}
+	got, err := env.st.GetPet(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Stats.Energy != wantEnergy {
+		t.Fatalf("energy = %v, want %v (single deduct)", got.Stats.Energy, wantEnergy)
+	}
+	if act := got.Activity; act != pet.ActivityAdventuring {
+		t.Fatalf("activity = %q, want adventuring", act)
+	}
+	runs, err := env.adv.listRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+}
+
+// TestSleepyStartInterleavingNoTornActivity 回归：sleepy 与 start 交错时不会 Sleeping∧Adventuring。
+func TestSleepyStartInterleavingNoTornActivity(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = env.engine.Care(context.Background(), p.ID, pet.ActionSleep)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = env.adv.start(context.Background(), p.ID)
+	}()
+	wg.Wait()
+
+	got, err := env.st.GetPet(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.SyncSleepingFromActivity()
+	if got.Sleeping && got.Activity == pet.ActivityAdventuring {
+		t.Fatalf("torn state: Sleeping && Adventuring: %+v", got)
+	}
+	switch got.Activity {
+	case pet.ActivitySleeping:
+		if !got.Sleeping {
+			t.Fatal("activity sleeping but flag false")
+		}
+	case pet.ActivityAdventuring:
+		if got.Sleeping {
+			t.Fatal("adventuring with Sleeping true")
+		}
+	case pet.ActivityIdle, "":
+		// 两者都失败极罕见；允许但不应撕裂
+	default:
+		t.Fatalf("unexpected activity %q", got.Activity)
 	}
 }
 

@@ -47,6 +47,10 @@ func adventureReject(outcome string) (code string, status int) {
 	switch {
 	case strings.Contains(outcome, "睡觉"):
 		return "invalid_state", http.StatusConflict
+	case strings.Contains(outcome, "太困"):
+		return "invalid_state", http.StatusConflict
+	case strings.Contains(outcome, "忙着"):
+		return "invalid_state", http.StatusConflict
 	case strings.Contains(outcome, "太累"):
 		return "low_energy", http.StatusConflict
 	case strings.Contains(outcome, "还在外面"):

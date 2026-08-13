@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lalolv/PocketPet/internal/pet"
+	"github.com/lalolv/PocketPet/internal/petstate"
 )
 
 // StoredMap 是落库后的一张地图（含 id）。
@@ -177,6 +178,9 @@ func (a *Adventure) abortAllRuns(ctx context.Context, now time.Time) error {
 		if p, err := a.ctx.GetPet(ctx, petID); err == nil {
 			name = p.Name
 		}
+		_, _ = a.ctx.Apply(ctx, petID, petstate.Transition{
+			To: pet.ActivityIdle, Owner: "adventure", Reason: "map-refresh",
+		})
 		a.ctx.Emit(ctx, pet.Event{
 			PetID: petID, Type: EventAborted,
 			Message: name + " 的探险因地图刷新中断了", CreatedAt: now,

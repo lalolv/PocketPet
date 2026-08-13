@@ -11,6 +11,7 @@ import (
 	"github.com/lalolv/PocketPet/internal/llm"
 	"github.com/lalolv/PocketPet/internal/pet"
 	"github.com/lalolv/PocketPet/internal/petfs"
+	"github.com/lalolv/PocketPet/internal/petstate"
 	"github.com/lalolv/PocketPet/internal/store"
 )
 
@@ -54,6 +55,13 @@ func (f *fakeEngine) Care(_ context.Context, id string, action pet.Action) (*pet
 	defer f.mu.Unlock()
 	f.cares = append(f.cares, careCall{id, action})
 	return nil, nil
+}
+
+func (f *fakeEngine) RequestSleep(_ context.Context, id, _ string) (petstate.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cares = append(f.cares, careCall{id, pet.ActionSleep})
+	return petstate.Result{OK: true}, nil
 }
 
 func (f *fakeEngine) ListPets(context.Context) ([]*pet.Pet, error) {
@@ -153,6 +161,35 @@ func TestSleepyEmitsMessageAndAutoSleeps(t *testing.T) {
 	}
 }
 
+// TestAutoSleepBeforeMessage 验证自动入睡在 LLM 文案之前，缩小与探险等入口的竞态窗。
+func TestAutoSleepBeforeMessage(t *testing.T) {
+	env := setup(t, allOn)
+	var sawCareBeforeCompose bool
+	env.msgr = &fakeMessager{text: "好困…"}
+	env.monitor.Messager = sleepOrderMessager{
+		inner: env.msgr,
+		onCompose: func() {
+			sawCareBeforeCompose = len(env.engine.careList()) > 0
+		},
+	}
+	env.monitor.handle(context.Background(), pet.Event{PetID: env.pet.ID, Type: pet.EventSleepy})
+	if !sawCareBeforeCompose {
+		t.Fatal("AutoSleep should run before compose")
+	}
+}
+
+type sleepOrderMessager struct {
+	inner     Messager
+	onCompose func()
+}
+
+func (m sleepOrderMessager) Compose(ctx context.Context, req ComposeRequest) (string, error) {
+	if m.onCompose != nil {
+		m.onCompose()
+	}
+	return m.inner.Compose(ctx, req)
+}
+
 // TestMessagesDisabledStillAutoSleeps 验证关闭主动消息不影响自动动作。
 func TestMessagesDisabledStillAutoSleeps(t *testing.T) {
 	env := setup(t, Options{Enabled: true, AutoSleep: true, AutoWake: true, Messages: false})
@@ -192,13 +229,47 @@ func TestWokeUpMessageCarriesWakeNote(t *testing.T) {
 	env.monitor.handle(context.Background(), pet.Event{PetID: env.pet.ID, Type: pet.EventWokeUp})
 
 	req := env.msgr.reqs[0]
-	if req.Trigger != pet.EventWokeUp || !strings.Contains(req.WakeNote, "鱼干海") {
+	if req.Trigger != pet.EventWokeUp || !strings.Contains(req.Frame.Fact, "鱼干海") {
 		t.Fatalf("compose req = %+v", req)
 	}
 	// 便签未被消费：仍可读。
 	if note, _ := env.fs.ReadWakeNote(env.pet.ID); !strings.Contains(note, "鱼干海") {
 		t.Fatalf("wake note should not be consumed, got %q", note)
 	}
+}
+
+// TestSleepyWhileBusyQueuesSpeechFrame 验证探险中困了：文案 Frame 禁止「已入睡」口吻。
+func TestSleepyWhileBusyQueuesSpeechFrame(t *testing.T) {
+	env := setup(t, allOn)
+	env.pet.Activity = pet.ActivityAdventuring
+	env.pet.SyncSleepingFromActivity()
+	if err := env.st.SavePet(context.Background(), env.pet); err != nil {
+		t.Fatal(err)
+	}
+	env.monitor.Engine = &busySleepEngine{fakeEngine: env.engine}
+	env.monitor.handle(context.Background(), pet.Event{PetID: env.pet.ID, Type: pet.EventSleepy})
+	if len(env.msgr.reqs) != 1 {
+		t.Fatalf("reqs = %d", len(env.msgr.reqs))
+	}
+	f := env.msgr.reqs[0].Frame
+	joined := strings.Join(f.Forbid, " ")
+	if !strings.Contains(joined, "主人晚安") && !strings.Contains(joined, "已经睡着了") {
+		t.Fatalf("forbid = %v fact=%q", f.Forbid, f.Fact)
+	}
+	if !strings.Contains(f.Fact, "还没睡着") && !strings.Contains(f.Instruction, "忙完") {
+		t.Fatalf("want queued-sleep guidance: fact=%q instr=%q", f.Fact, f.Instruction)
+	}
+}
+
+type busySleepEngine struct {
+	*fakeEngine
+}
+
+func (b *busySleepEngine) RequestSleep(_ context.Context, id, _ string) (petstate.Result, error) {
+	b.mu.Lock()
+	b.cares = append(b.cares, careCall{id, pet.ActionSleep})
+	b.mu.Unlock()
+	return petstate.Result{OK: true, Queued: true}, nil
 }
 
 // TestComposeErrorSkipsMessage 验证 LLM 失败只跳过消息，不产生事件也不出错。
@@ -234,6 +305,31 @@ func TestOnTickAutoWake(t *testing.T) {
 	}
 }
 
+// TestOnTickAutoSleepWhenStuckSleepy 醒着且精力持续低于预警时，tick 会补 AutoSleep。
+func TestOnTickAutoSleepWhenStuckSleepy(t *testing.T) {
+	env := setup(t, allOn)
+	p := pet.New("sleepy", "sleepy", "猫", time.Now())
+	p.Stats.Energy = 20
+	p.Alerts.Sleepy = true // 边沿已过，不会再发 pet.sleepy
+	env.engine.pets = []*pet.Pet{p}
+	env.monitor.OnTick(context.Background(), time.Now())
+	cares := env.engine.careList()
+	if len(cares) != 1 || cares[0].action != pet.ActionSleep {
+		t.Fatalf("cares = %+v, want AutoSleep", cares)
+	}
+}
+
+// TestEnsureAutoSleepSkippedWhenRested 精力充足时不入睡。
+func TestEnsureAutoSleepSkippedWhenRested(t *testing.T) {
+	env := setup(t, allOn)
+	p := pet.New("ok", "ok", "猫", time.Now())
+	p.Stats.Energy = 80
+	env.monitor.EnsureAutoSleep(context.Background(), p)
+	if len(env.engine.careList()) != 0 {
+		t.Fatalf("cares = %+v", env.engine.careList())
+	}
+}
+
 // TestOnTickRespectsOptions 验证总开关/自动醒来开关关闭时不动作。
 func TestOnTickRespectsOptions(t *testing.T) {
 	for _, opts := range []Options{
@@ -251,28 +347,125 @@ func TestOnTickRespectsOptions(t *testing.T) {
 	}
 }
 
-// TestPublishAsyncAndDedup 验证 Publish 立即返回、异步处理且同宠物并发去重。
+// TestPublishAsyncAndDedup 验证同宠消息处理中重复触发会去重，不会并发双开 compose。
 func TestPublishAsyncAndDedup(t *testing.T) {
 	env := setup(t, allOn)
-	ev := pet.Event{PetID: env.pet.ID, Type: pet.EventHungry}
+	release := make(chan struct{})
+	env.monitor.Messager = blockingMessager{release: release, text: "主人，我饿啦！"}
 
+	ev := pet.Event{PetID: env.pet.ID, Type: pet.EventHungry}
 	env.monitor.Publish(ev)
-	env.monitor.Publish(ev) // 可能与前一次并发：去重后至多一条消息
+	time.Sleep(20 * time.Millisecond)
+	env.monitor.Publish(ev) // pending 中：同类型入队去重
+	close(release)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if n := len(env.emitted()); n > 0 {
-			if n > 1 {
-				t.Fatalf("dedup failed: events = %+v", env.emitted())
-			}
-			if env.emitted()[0].Type != pet.EventProactive {
-				t.Fatalf("event = %+v", env.emitted()[0])
+		n := len(env.emitted())
+		if n == 0 {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		if n != 1 {
+			t.Fatalf("dedup failed: events = %+v", env.emitted())
+		}
+		if env.emitted()[0].Type != pet.EventProactive {
+			t.Fatalf("event = %+v", env.emitted()[0])
+		}
+		return
+	}
+	t.Fatal("no proactive event emitted within 2s")
+}
+
+// TestMsgQueueDrainsSleepyAfterHungry 饥饿文案处理中到达的 sleepy 会排队补发文案。
+func TestMsgQueueDrainsSleepyAfterHungry(t *testing.T) {
+	env := setup(t, allOn)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var triggers []string
+	env.monitor.Messager = &recordingBlockingMessager{release: release, onCompose: func(req ComposeRequest) {
+		mu.Lock()
+		triggers = append(triggers, req.Trigger)
+		mu.Unlock()
+	}}
+
+	env.monitor.Publish(pet.Event{PetID: env.pet.ID, Type: pet.EventHungry})
+	time.Sleep(20 * time.Millisecond)
+	env.monitor.Publish(pet.Event{PetID: env.pet.ID, Type: pet.EventSleepy})
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(triggers)
+		mu.Unlock()
+		if n >= 2 {
+			mu.Lock()
+			got := append([]string(nil), triggers...)
+			mu.Unlock()
+			if got[0] != pet.EventHungry || got[1] != pet.EventSleepy {
+				t.Fatalf("triggers = %v", got)
 			}
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("no proactive event emitted within 2s")
+	t.Fatalf("want hungry then sleepy compose, got %v", triggers)
+}
+
+type recordingBlockingMessager struct {
+	release   <-chan struct{}
+	onCompose func(ComposeRequest)
+}
+
+func (m *recordingBlockingMessager) Compose(ctx context.Context, req ComposeRequest) (string, error) {
+	if m.onCompose != nil {
+		m.onCompose(req)
+	}
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return "msg", nil
+}
+
+// TestSleepyAutoSleepNotBlockedByHungryMessage 同 tick 先饿后困：AutoSleep 不被消息 pending 丢掉。
+func TestSleepyAutoSleepNotBlockedByHungryMessage(t *testing.T) {
+	env := setup(t, allOn)
+	release := make(chan struct{})
+	env.monitor.Messager = blockingMessager{release: release, text: "饿…"}
+
+	env.monitor.Publish(pet.Event{PetID: env.pet.ID, Type: pet.EventHungry})
+	time.Sleep(20 * time.Millisecond) // 让 hungry goroutine 跑起来并占用 pending
+	env.monitor.Publish(pet.Event{PetID: env.pet.ID, Type: pet.EventSleepy})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		for _, c := range env.engine.careList() {
+			if c.action == pet.ActionSleep {
+				close(release)
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	t.Fatalf("AutoSleep should run while hungry message pending; cares=%+v", env.engine.careList())
+}
+
+type blockingMessager struct {
+	release <-chan struct{}
+	text    string
+}
+
+func (b blockingMessager) Compose(ctx context.Context, req ComposeRequest) (string, error) {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return b.text, nil
 }
 
 // TestPublishIgnoresUnrelated 验证无关事件与总开关关闭时不触发。

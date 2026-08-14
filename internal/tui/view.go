@@ -244,7 +244,8 @@ func (m model) renderLogLines() []string {
 	return lines
 }
 
-// renderSprite 渲染精灵动画区（含庆祝覆盖与低属性提示装饰）。
+// renderSprite 渲染精灵动画区：固定盒内依次排布环境行 / 庆祝彩点 / 探险 banner、
+// 精灵帧、地面线、覆盖层底部、低属性装饰；排版后按行类型逐行着色。
 func (m model) renderSprite() string {
 	sp := spriteFor(m.pet.Species)
 
@@ -273,62 +274,124 @@ func (m model) renderSprite() string {
 		frame = strings.NewReplacer("{e}", f.eyes, "{m}", f.mouth).Replace(frame)
 	}
 
-	lines := strings.Split(strings.TrimPrefix(frame, "\n"), "\n")
-	// 升级庆祝：上下各加一行交替闪烁的字符彩点。
-	if m.action == animCelebrate {
-		var sparkle string
-		if m.frame%2 == 0 {
-			sparkle = "* · * · *"
-		} else {
-			sparkle = "· * · * ·"
-		}
-		lines = append([]string{sparkle}, append(lines, sparkle)...)
+	var body []boxLine
+	for _, l := range strings.Split(strings.TrimPrefix(frame, "\n"), "\n") {
+		body = append(body, boxLine{l, lineSprite})
+	}
+	// 地面线：精灵脚下的一行点缀，填补盒子底部空行，画面更稳。
+	body = append(body, boxLine{" · · · · · · ·", lineGround})
+
+	celebrate := m.action == animCelebrate
+	adventure := m.action == animAdventure || m.adventuring
+	// 升级庆祝：上下各加一行交替闪烁的彩点。
+	if celebrate {
+		body = append([]boxLine{{sparklePattern(m.frame), lineSparkle}},
+			append(body, boxLine{sparklePattern(m.frame + 1), lineSparkle})...)
 	}
 	// 探险中：顶部滚动地图路径，底部提示。
-	if m.action == animAdventure || m.adventuring {
-		banner := adventurePathBanner(m.frame)
-		footer := "→ 探险中"
-		if m.advNode != "" {
-			footer = "→ " + m.advNode
+	if adventure {
+		body = append([]boxLine{{adventurePathBanner(m.frame), lineBanner}},
+			append(body, boxLine{adventureFooter(m.advNode, m.advChests), lineFooter})...)
+	}
+	// 环境行（仅无覆盖层时）：睡觉星光闪烁、开心音符漂浮。
+	if !celebrate && !adventure {
+		if a := m.ambientLine(); a != "" {
+			body = append([]boxLine{{a, lineAmbient}}, body...)
 		}
-		if m.advChests > 0 {
-			footer += fmt.Sprintf(" ★×%d", m.advChests)
-		}
-		lines = append([]string{banner}, append(lines, footer)...)
 	}
 	// 低属性提示装饰。
 	if m.pet.Alive {
 		if d := decorations(m.pet); d != "" {
-			lines = append(lines, d)
+			body = append(body, boxLine{d, lineDecor})
 		}
 	}
+
 	// 固定盒子：高度、宽度逐帧恒定——动画只换字符、绝不动布局，
-	// 这是动画期间界面不抖的关键。
-	lines = fitLines(lines, spriteBoxH, spriteBoxW)
-	for i, l := range lines {
-		lines[i] = "  " + l
+	// 这是动画期间界面不抖的关键。先排版（fitBoxLines）后逐行着色，
+	// ANSI 序列不参与显示宽度计算。
+	body = fitBoxLines(body, spriteBoxH, spriteBoxW)
+	lines := make([]string, len(body))
+	for i, bl := range body {
+		lines[i] = "  " + m.styleBoxLine(bl)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// 盒内行类型：决定排版后的着色方式（见 theme.go 的 styleBoxLine）。
+type boxLineKind int
+
+const (
+	lineBlank boxLineKind = iota
+	lineSprite
+	lineGround  // 精灵脚下的地面线
+	lineSparkle // 升级庆祝彩点
+	lineBanner  // 探险滚动路径
+	lineFooter  // 探险底部提示
+	lineDecor   // 低属性提示装饰
+	lineAmbient // 环境行（睡觉星光 / 开心音符）
+)
+
+// boxLine 是固定盒里的一行：裸文本 + 行类型。
+type boxLine struct {
+	text string
+	kind boxLineKind
+}
+
+// sparklePattern 庆祝彩点图案（奇偶帧交错闪烁）。
+func sparklePattern(frame int) string {
+	if frame%2 == 0 {
+		return "* · * · *"
+	}
+	return "· * · * ·"
+}
+
+// adventureFooter 探险卡片的底部提示行。
+func adventureFooter(node string, chests int) string {
+	footer := "→ 探险中"
+	if node != "" {
+		footer = "→ " + node
+	}
+	if chests > 0 {
+		footer += fmt.Sprintf(" ★×%d", chests)
+	}
+	return footer
+}
+
+// ambientLine 返回空闲态的环境行：睡觉星光、开心音符；其余为空（不占行）。
+func (m model) ambientLine() string {
+	switch {
+	case m.pet.Sleeping:
+		if m.frame%2 == 0 {
+			return " ✦      ·"
+		}
+		return " ·      ✦"
+	case m.pet.Alive && m.pet.Stats.Happy >= 70:
+		if m.frame%2 == 0 {
+			return "  ♪"
+		}
+		return "   ♪"
+	}
+	return ""
 }
 
 // 精灵区固定盒子尺寸（宽为显示列数，高为行数）。
 const (
 	spriteBoxW = 24 // 覆盖最宽内容：帧 ≤14、探险 banner 13、双项低属性装饰约 23
-	spriteBoxH = 8  // 最坏组合：帧 5 + 探险 banner/footer 2 + 低属性装饰 1
+	spriteBoxH = 8  // 帧 5 + 覆盖层 2 + 地面 1；低属性装饰在极端组合下让位截断
 )
 
-// fitLines 把内容行装进固定盒子：超高截断、不足补空行；
-// 每行按显示宽度截断（超宽加省略号）并右侧补齐到等宽。
-func fitLines(lines []string, height, width int) []string {
-	if len(lines) > height {
-		lines = lines[:height]
+// fitBoxLines 把盒内行装进固定盒子：超高截断、不足补空行、每行等宽（裸文本排版）。
+func fitBoxLines(body []boxLine, height, width int) []boxLine {
+	if len(body) > height {
+		body = body[:height]
 	}
-	out := make([]string, 0, height)
-	for _, l := range lines {
-		out = append(out, fitWidth(l, width))
+	out := make([]boxLine, 0, height)
+	for _, bl := range body {
+		bl.text = fitWidth(bl.text, width)
+		out = append(out, bl)
 	}
 	for len(out) < height {
-		out = append(out, strings.Repeat(" ", width))
+		out = append(out, boxLine{strings.Repeat(" ", width), lineBlank})
 	}
 	return out
 }

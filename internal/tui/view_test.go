@@ -72,7 +72,7 @@ func TestRenderSpriteFixedBox(t *testing.T) {
 							name, action, adventuring, frame, len(lines), spriteBoxH)
 					}
 					for i, l := range lines {
-						if w := runewidth.StringWidth(l); w != 2+spriteBoxW {
+						if w := lipgloss.Width(l); w != 2+spriteBoxW {
 							t.Fatalf("%s action=%d adv=%v frame=%d 行 %d 宽 %d ≠ %d：%q",
 								name, action, adventuring, frame, i, w, 2+spriteBoxW, l)
 						}

@@ -89,8 +89,9 @@ func speciesColor(species string) color.Color {
 	}
 }
 
-// spriteCardStyle 精灵卡片样式：圆角边框 + 物种色内容。
-// 边框色随状态变化（死亡/生病红、睡觉紫、开心粉、常态灰）——卡片本身即状态指示。
+// spriteCardStyle 精灵卡片样式：圆角边框，边框色随状态（死亡/生病红、睡觉紫、开心粉）。
+// 卡片本身即状态指示；内容由 renderSprite 逐行着色（见 styleBoxLine），
+// 这里不设整体 Foreground，避免嵌套样式的 reset 冲掉行内分色。
 // 边框只给固定盒外加恒定 2 行 2 列，不破坏防抖动的布局恒定约束。
 func (m model) spriteCardStyle() lipgloss.Style {
 	border := faintGray
@@ -104,8 +105,55 @@ func (m model) spriteCardStyle() lipgloss.Style {
 	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border).
-		Foreground(speciesColor(m.pet.Species))
+		BorderForeground(border)
+}
+
+// styleBoxLine 按行类型给固定盒内的一行着色（排版完成后调用，ANSI 不参与宽度计算）。
+func (m model) styleBoxLine(bl boxLine) string {
+	switch bl.kind {
+	case lineSprite:
+		return lipgloss.NewStyle().Foreground(speciesColor(m.pet.Species)).Render(bl.text)
+	case lineGround:
+		return faintStyle.Render(bl.text)
+	case lineSparkle:
+		return styleSparkle(bl.text, m.frame)
+	case lineBanner, lineFooter:
+		return styleAdventureLine(bl.text)
+	case lineDecor:
+		return warnStyle.Render(bl.text)
+	case lineAmbient:
+		if m.pet.Sleeping {
+			return sleepStyle.Render(bl.text)
+		}
+		return accentStyle.Render(bl.text)
+	default: // lineBlank
+		return bl.text
+	}
+}
+
+// styleSparkle 给庆祝彩点逐颗上色：星星按帧号轮换彩虹色，圆点保持默认色。
+func styleSparkle(line string, frame int) string {
+	rainbow := []lipgloss.Style{successStyle, warnStyle, dangerStyle, sleepStyle, accentStyle}
+	var b strings.Builder
+	star := 0
+	for _, r := range line {
+		if r == '*' {
+			b.WriteString(rainbow[(frame+star)%len(rainbow)].Render("*"))
+			star++
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// styleAdventureLine 给探险 banner/footer 的关键符号上色：→ 主题色、◆ 黄、★ 绿。
+func styleAdventureLine(line string) string {
+	return strings.NewReplacer(
+		"→", accentStyle.Render("→"),
+		"◆", warnStyle.Render("◆"),
+		"★", successStyle.Render("★"),
+	).Replace(line)
 }
 
 // moodBadge 渲染心情徽章：彩色圆点 + 心情词（绿开心 / 黄预警 / 红难受 / 紫睡觉）。

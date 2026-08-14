@@ -106,13 +106,17 @@ func TestSpriteCardStable(t *testing.T) {
 }
 
 // TestRenderLogLinesFixedWindow 日志区是固定行数窗口：任意日志量下行数恒定，
-// 超出窗口时保留最新内容。
+// 超出窗口时保留最新内容；logOffset > 0 时向上回看；行数随终端高度自适应。
 func TestRenderLogLinesFixedWindow(t *testing.T) {
 	var m model
+	w := m.logAreaLines()
+	if w != defaultLogAreaLines {
+		t.Fatalf("未拿到终端高度时应回落默认窗口：%d ≠ %d", w, defaultLogAreaLines)
+	}
 	// 空日志：占位文案 + 空行补齐
 	got := m.renderLogLines()
-	if len(got) != logAreaLines {
-		t.Fatalf("空日志：行数 %d ≠ %d", len(got), logAreaLines)
+	if len(got) != w {
+		t.Fatalf("空日志：行数 %d ≠ %d", len(got), w)
 	}
 	if !strings.Contains(got[0], "还没有消息") {
 		t.Fatalf("空日志：首行 = %q", got[0])
@@ -126,22 +130,39 @@ func TestRenderLogLinesFixedWindow(t *testing.T) {
 	// 少于窗口：内容在前、空行在后
 	m.logs = []string{"a", "b", "c"}
 	got = m.renderLogLines()
-	if len(got) != logAreaLines || got[0] != "a" || got[2] != "c" || got[3] != "" || got[7] != "" {
+	if len(got) != w || got[0] != "a" || got[2] != "c" || got[3] != "" || got[w-1] != "" {
 		t.Fatalf("少量日志 = %v", got)
 	}
 
 	// 超出窗口（窄宽度下每条软换行为多行）：保留最新、行数仍恒定
-	m.width = 12 // logWrapWidth = 10，每条日志 8 个汉字折成 2 行
+	m.width = 12 // logWrapWidth = 10，每条日志折成多行
 	m.logs = nil
-	for i := 0; i < maxLogs; i++ {
+	for i := 0; i < 10; i++ {
 		m.logf("log%d 一二三四五六七八", i)
 	}
 	got = m.renderLogLines()
-	if len(got) != logAreaLines {
-		t.Fatalf("超窗日志：行数 %d ≠ %d", len(got), logAreaLines)
+	if len(got) != w {
+		t.Fatalf("超窗日志：行数 %d ≠ %d", len(got), w)
 	}
 	joined := strings.Join(got, "\n")
-	if strings.Contains(joined, "log0") || !strings.Contains(joined, "log6") {
+	if strings.Contains(joined, "log0") || !strings.Contains(joined, "log9") {
 		t.Fatalf("超窗日志未保留最新内容：%q", joined)
+	}
+
+	// 回看：偏移足够大时窗口停在最早的内容（防御性收敛到上限）
+	m.logOffset = 100
+	got = m.renderLogLines()
+	if !strings.Contains(strings.Join(got, "\n"), "log0") {
+		t.Fatalf("回看应显示最早日志：%q", got)
+	}
+
+	// 高度自适应：窗口 = 终端高 - 固定行 14 - 1 行余量，下限 4
+	m.height = 40
+	if n := m.logAreaLines(); n != 25 {
+		t.Fatalf("自适应窗口 = %d, want 25", n)
+	}
+	m.height = 10
+	if n := m.logAreaLines(); n != 4 {
+		t.Fatalf("矮终端窗口 = %d, want 4", n)
 	}
 }

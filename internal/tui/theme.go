@@ -24,6 +24,7 @@ var (
 	yellow    = lipgloss.Color("#E8C37A") // 预警 / 宝箱
 	red       = lipgloss.Color("#E87A7A") // 生病 / 危险 / 死亡
 	faintGray = lipgloss.Color("#6E6E6E") // 卡片边框常态
+	track     = lipgloss.Color("#484850") // 属性条轨道（未填充格）：比边框暗但可见
 	catColor  = lipgloss.Color("#F0A58A") // 猫：蜜桃
 	dogColor  = lipgloss.Color("#E8CF8A") // 狗：奶黄
 	blobColor = lipgloss.Color("#8AC4F0") // blob：天蓝
@@ -41,6 +42,7 @@ func SetDarkBackground(dark bool) {
 	yellow = lipgloss.Color("#A87B2F")
 	red = lipgloss.Color("#B44545")
 	faintGray = lipgloss.Color("#9AA0A6")
+	track = lipgloss.Color("#D8D4E0")
 	catColor = lipgloss.Color("#C46A4E")
 	dogColor = lipgloss.Color("#A8812F")
 	blobColor = lipgloss.Color("#3F6FA8")
@@ -49,15 +51,16 @@ func SetDarkBackground(dark bool) {
 
 // 全站样式。颜色相关的样式由 buildStyles 构建（换色板后可重建）。
 var (
-	headerStyle  = lipgloss.NewStyle().Bold(true)   // 界面标题 / 宠物名
-	faintStyle   = lipgloss.NewStyle().Faint(true)  // 暗淡辅助信息（无色时也有效）
-	inputStyle   lipgloss.Style                     // 输入行 / 流式回复
-	accentStyle  lipgloss.Style                     // 主题色正文（宠物发言、探险态）
-	keyStyle     lipgloss.Style                     // 按键提示
+	headerStyle  = lipgloss.NewStyle().Bold(true)  // 界面标题 / 宠物名
+	faintStyle   = lipgloss.NewStyle().Faint(true) // 暗淡辅助信息（无色时也有效）
+	inputStyle   lipgloss.Style                    // 输入行 / 流式回复
+	accentStyle  lipgloss.Style                    // 主题色正文（宠物发言、探险态）
+	keyStyle     lipgloss.Style                    // 按键提示
 	successStyle lipgloss.Style
 	warnStyle    lipgloss.Style
 	dangerStyle  lipgloss.Style
 	sleepStyle   lipgloss.Style
+	trackStyle   lipgloss.Style // 属性条轨道（未填充格）
 )
 
 func init() { buildStyles() }
@@ -70,6 +73,7 @@ func buildStyles() {
 	warnStyle = lipgloss.NewStyle().Foreground(yellow)
 	dangerStyle = lipgloss.NewStyle().Foreground(red)
 	sleepStyle = lipgloss.NewStyle().Foreground(lavender)
+	trackStyle = lipgloss.NewStyle().Foreground(track)
 }
 
 // keyHint 渲染一枚胶囊式按键提示：按键主题色加粗，说明暗淡。

@@ -15,7 +15,7 @@ import (
 const (
 	frameDur        = 250 * time.Millisecond // 动画帧间隔
 	reconnectDur    = 2 * time.Second        // SSE 断线重连等待
-	maxLogs         = 7                      // 日志区保留条数
+	maxLogs         = 50                     // 日志区保留条数（回看缓冲）
 	animActionTicks = 6                      // eat/play/clean 动作帧数
 	celebrateTicks  = 8                      // 升级庆祝帧数
 )
@@ -74,6 +74,7 @@ type model struct {
 	action      animAction
 	frame       int
 	logs        []string
+	logOffset   int // 日志回看的向上偏移行数（0 = 贴底看最新）
 	chatMode    bool
 	input       string
 	sseCh       chan Event
@@ -85,9 +86,9 @@ type model struct {
 	advChests   int
 
 	// 流式聊天
-	streaming  bool              // 正在接收回复流
-	streamBuf  string            // 已收到的部分回复
-	chatCh     chan chatEvent    // 聊天流通道
+	streaming  bool               // 正在接收回复流
+	streamBuf  string             // 已收到的部分回复
+	chatCh     chan chatEvent     // 聊天流通道
 	chatCancel context.CancelFunc // esc 中断流
 
 	offline string // 离线原因（screenOffline 展示）
@@ -102,9 +103,9 @@ func NewModel(client *Client) model {
 
 // 消息类型。
 type (
-	tickMsg       time.Time // 动画帧
-	petsMsg       []Pet     // 宠物列表
-	petMsg        Pet       // 宠物状态（get/care 响应）
+	tickMsg       time.Time   // 动画帧
+	petsMsg       []Pet       // 宠物列表
+	petMsg        Pet         // 宠物状态（get/care 响应）
 	createdMsg    Pet         // 创建成功（旧路径）
 	birthStartMsg BirthResult // MetaAgent 诞生开始
 	chatEventMsg  chatEvent   // 聊天流事件
@@ -114,6 +115,7 @@ type (
 	careResultMsg struct {
 		pet    Pet
 		action string
+		before Stats // 动作前的属性快照（算增量用）
 	}
 	adventureResultMsg AdventureRun
 	adventureStatusMsg AdventureRun
@@ -172,13 +174,14 @@ func createCmd(c *Client, name, species, personality string) tea.Cmd {
 	}
 }
 
-func careCmd(c *Client, id, action string) tea.Cmd {
+// careCmd 执行照顾动作；before 是按键瞬间的属性快照，用于回执日志的增量文案。
+func careCmd(c *Client, id, action string, before Stats) tea.Cmd {
 	return func() tea.Msg {
 		p, err := c.Care(context.Background(), id, action)
 		if err != nil {
 			return errMsg{"care", err}
 		}
-		return careResultMsg{pet: p, action: action}
+		return careResultMsg{pet: p, action: action, before: before}
 	}
 }
 
@@ -295,6 +298,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.screen = screenSelect
 			m.cursor = 0
+			// 从主界面 esc 返回时，光标落在刚才那只宠物上。
+			for i, p := range msg {
+				if p.ID == m.pet.ID {
+					m.cursor = i
+					break
+				}
+			}
 		}
 		return m, nil
 
@@ -309,12 +319,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case birthStartMsg:
 		res := BirthResult(msg)
 		// 换宠订阅：停掉旧 SSE（若有）。
-		if m.sseCancel != nil {
-			m.sseCancel()
-			m.sseCancel = nil
-			m.sseCh = nil
-			m.stateCh = nil
-		}
+		m.stopSSE()
 		m.screen = screenBirth
 		m.birthReady = false
 		m.birthLog = []string{"一颗蛋开始发光……"}
@@ -344,7 +349,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case careResultMsg:
 		m.pet = msg.pet
-		m.logf("✔ %s", actionLabel(msg.action))
+		if d := statDeltaText(msg.before, msg.pet.Stats); d != "" {
+			m.logf("✔ %s %s", actionLabel(msg.action), d)
+		} else {
+			m.logf("✔ %s", actionLabel(msg.action))
+		}
 		return m, nil
 
 	case adventureResultMsg:
@@ -428,6 +437,11 @@ func (m model) onKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.chatCancel()
 		}
 		return m, nil
+	} else if k.Code == tea.KeyEscape && m.screen == screenMain {
+		// 返回选宠列表：停掉当前宠物的事件订阅，重新拉取列表。
+		m.stopSSE()
+		m.screen = screenSelect
+		return m, loadPetsCmd(m.client)
 	} else if k.Text == "q" {
 		m.shutdown()
 		return m, tea.Quit
@@ -469,8 +483,11 @@ func (m model) onSelectKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.createField = 0
 	case k.Code == tea.KeyEnter:
 		p := m.pets[m.cursor]
+		m.stopSSE() // 从主界面返回再进入时，先停掉上一只的订阅
 		m.pet = p
 		m.petLoading = true
+		m.adventuring, m.advNode, m.advChests = false, "", 0
+		m.logs, m.logOffset = nil, 0 // 日志随宠物切换清空
 		m.screen = screenMain
 		m.logf("见到了 %s！", p.Name)
 		return m, tea.Batch(getPetCmd(m.client, p.ID), m.startSSE())
@@ -537,6 +554,7 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
+			m.logOffset = 0 // 发送后贴回底部看回复
 			m.logf("我：%s", text)
 			return m, m.startChat(text)
 		case tea.KeyBackspace:
@@ -550,6 +568,16 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// 日志翻页：PgUp 回看 / PgDn 回到底部（死亡后也可翻）。
+	switch k.Code {
+	case tea.KeyPgUp:
+		m.logOffset = min(m.logOffset+m.logAreaLines(), max(0, m.logTotalLines()-m.logAreaLines()))
+		return m, nil
+	case tea.KeyPgDown:
+		m.logOffset = max(0, m.logOffset-m.logAreaLines())
+		return m, nil
+	}
+
 	if !m.pet.Alive {
 		if k.Text == "r" {
 			return m, getPetCmd(m.client, m.pet.ID)
@@ -557,20 +585,22 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil // 死亡后动作键禁用（q 在全局处理）
 	}
 
+	// 翻页键之外的任意操作：日志视口贴回底部，看最新反馈。
+	m.logOffset = 0
 	switch k.Text {
 	case "f":
 		m.action, m.frame = animEat, 0
-		return m, careCmd(m.client, m.pet.ID, "feed")
+		return m, careCmd(m.client, m.pet.ID, "feed", m.pet.Stats)
 	case "p":
 		m.action, m.frame = animPlay, 0
-		return m, careCmd(m.client, m.pet.ID, "play")
+		return m, careCmd(m.client, m.pet.ID, "play", m.pet.Stats)
 	case "c":
 		m.action, m.frame = animClean, 0
-		return m, careCmd(m.client, m.pet.ID, "clean")
+		return m, careCmd(m.client, m.pet.ID, "clean", m.pet.Stats)
 	case "s":
-		return m, careCmd(m.client, m.pet.ID, "sleep")
+		return m, careCmd(m.client, m.pet.ID, "sleep", m.pet.Stats)
 	case "w":
-		return m, careCmd(m.client, m.pet.ID, "wake")
+		return m, careCmd(m.client, m.pet.ID, "wake", m.pet.Stats)
 	case "t":
 		if m.streaming {
 			return m, nil // 流式回复中，忽略新聊天
@@ -740,6 +770,16 @@ func (m model) onError(e errMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// stopSSE 停止当前宠物的事件订阅并清空通道（换宠/返回选宠列表时调用）。
+func (m *model) stopSSE() {
+	if m.sseCancel != nil {
+		m.sseCancel()
+		m.sseCancel = nil
+	}
+	m.sseCh = nil
+	m.stateCh = nil
+}
+
 // startSSE 启动 SSE 订阅（断线自动重连），返回等待事件与状态快照的命令。
 func (m *model) startSSE() tea.Cmd {
 	if m.sseCh != nil {
@@ -840,6 +880,28 @@ func friendlyErr(err error) string {
 		}
 	}
 	return "网络错误：" + err.Error()
+}
+
+// statDeltaText 返回照顾动作前后的属性差文案（只列有变化的项），如 "饱食+14 清洁-2 EXP+2"。
+func statDeltaText(before, after Stats) string {
+	deltas := []struct {
+		label string
+		d     int
+	}{
+		{"饱食", after.Hunger - before.Hunger},
+		{"心情", after.Happy - before.Happy},
+		{"清洁", after.Clean - before.Clean},
+		{"精力", after.Energy - before.Energy},
+		{"健康", after.Health - before.Health},
+		{"EXP", after.EXP - before.EXP},
+	}
+	var parts []string
+	for _, d := range deltas {
+		if d.d != 0 {
+			parts = append(parts, fmt.Sprintf("%s%+d", d.label, d.d))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // actionLabel 是动作的中文名（日志用）。

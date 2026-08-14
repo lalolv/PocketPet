@@ -180,11 +180,14 @@ func (m model) renderMain() string {
 	// 精灵卡片（圆角边框 + 物种色，见 theme.go）+ 属性
 	spriteCard := m.spriteCardStyle().Render(m.renderSprite())
 	statsBlock := renderStats(m.pet)
-	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, spriteCard, "  ", statsBlock) + "\n")
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, spriteCard, "    ", statsBlock) + "\n")
 
-	// 日志区：固定行数窗口（长行按终端宽度软换行，最新内容优先，不足补空行），
-	// 行数恒定后整屏总高度不随日志进出跳动。
-	b.WriteString(faintStyle.Render("── 日志 "+strings.Repeat("─", 12)) + "\n")
+	// 日志区：行数随终端高度自适应（长行按宽度软换行，最新优先，不足补空行）。
+	logHead := "── 日志 "
+	if m.logOffset > 0 {
+		logHead += fmt.Sprintf("（回看 %d 行 · PgDn 回到底部）", m.logOffset)
+	}
+	b.WriteString(faintStyle.Render(logHead+strings.Repeat("─", 12)) + "\n")
 	for _, l := range m.renderLogLines() {
 		b.WriteString(l + "\n")
 	}
@@ -207,24 +210,55 @@ func (m model) renderMain() string {
 	} else if m.streaming {
 		b.WriteString(faintStyle.Render("回复中…… esc 中断") + "\n")
 	} else if !m.pet.Alive {
-		b.WriteString(" " + keyHint("r", "刷新") + faintStyle.Render("  ·  ") + keyHint("q", "退出") + "\n")
+		hints := []string{keyHint("r", "刷新"), keyHint("esc", "返回"), keyHint("q", "退出")}
+		b.WriteString(strings.Join(hints, faintStyle.Render(" · ")) + "\n")
 	} else {
-		hints := []string{
-			keyHint("f", "喂食"), keyHint("p", "玩耍"), keyHint("c", "清洁"),
-			keyHint("a", "探险"), keyHint("s", "睡觉"), keyHint("w", "叫醒"),
-			keyHint("t", "聊天"), keyHint("r", "刷新"), keyHint("q", "退出"),
+		// 按键提示跟随活动态（与头部徽章同一 act 判定）：喂食/玩耍在睡眠中会
+		// 被领域层拒绝（pet.ErrSleeping），睡着时不展示；探险中不给出游/哄睡。
+		var hints []string
+		if act != "sleeping" {
+			hints = append(hints, keyHint("f", "喂食"), keyHint("p", "玩耍"))
 		}
-		b.WriteString(" " + strings.Join(hints, faintStyle.Render(" · ")) + "\n")
+		hints = append(hints, keyHint("c", "清洁"))
+		if act == "sleeping" {
+			hints = append(hints, keyHint("w", "叫醒"))
+		} else if act != "adventuring" {
+			hints = append(hints, keyHint("a", "探险"), keyHint("s", "睡觉"))
+		}
+		hints = append(hints, keyHint("t", "聊天"), keyHint("r", "刷新"),
+			keyHint("esc", "返回"), keyHint("q", "退出"))
+		b.WriteString(strings.Join(hints, faintStyle.Render(" · ")) + "\n")
 	}
-	return b.String()
+	// 去掉行尾换行：内联渲染下多出的空行会把顶部内容顶出可视区。
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// logAreaLines 是日志区的固定行数（按渲染后的行数计，而非日志条目数）。
-const logAreaLines = 8
+// defaultLogAreaLines 是尚未拿到终端高度时的日志区行数。
+const defaultLogAreaLines = 8
 
-// renderLogLines 把日志渲染成固定行数的窗口：条目软换行后保留最新若干行，
-// 不足补空行。旧条目被挤出窗口与 maxLogs 的淘汰语义一致。
+// logAreaLines 返回日志区行数：随终端高度自适应。
+// 预算 = 终端高 - 固定行 14（头部/分隔/精灵区 10/日志标题/底栏）- 1 行余量：
+// 内联渲染（非 altscreen）下整屏恰好放满会把顶部行顶出可视区，刻意留一行。
+func (m model) logAreaLines() int {
+	if m.height <= 0 {
+		return defaultLogAreaLines
+	}
+	return max(4, m.height-15)
+}
+
+// logTotalLines 返回日志软换行后的总行数（回看偏移的上限用）。
+func (m model) logTotalLines() int {
+	n := 0
+	for _, entry := range m.logs {
+		n += len(wrapText(entry, m.logWrapWidth()))
+	}
+	return n
+}
+
+// renderLogLines 把日志渲染成固定行数的窗口：条目软换行后默认贴底（最新），
+// logOffset > 0 时向上回看，不足补空行。行数恒定后整屏总高不随日志进出跳动。
 func (m model) renderLogLines() []string {
+	w := m.logAreaLines()
 	var lines []string
 	if len(m.logs) == 0 {
 		lines = append(lines, faintStyle.Render("（还没有消息）"))
@@ -234,11 +268,12 @@ func (m model) renderLogLines() []string {
 				lines = append(lines, styleLog(entry, wl))
 			}
 		}
-		if len(lines) > logAreaLines {
-			lines = lines[len(lines)-logAreaLines:]
+		if len(lines) > w {
+			off := min(m.logOffset, len(lines)-w) // 防御性收敛（新日志顶进来时允许漂移）
+			lines = lines[len(lines)-w-off : len(lines)-off]
 		}
 	}
-	for len(lines) < logAreaLines {
+	for len(lines) < w {
 		lines = append(lines, "")
 	}
 	return lines
@@ -357,7 +392,7 @@ func adventureFooter(node string, chests int) string {
 	return footer
 }
 
-// ambientLine 返回空闲态的环境行：睡觉星光、开心音符；其余为空（不占行）。
+// ambientLine 返回空闲态的环境行：睡觉星光、开心音符（生病时不飘）；其余为空（不占行）。
 func (m model) ambientLine() string {
 	switch {
 	case m.pet.Sleeping:
@@ -365,7 +400,7 @@ func (m model) ambientLine() string {
 			return " ✦      ·"
 		}
 		return " ·      ✦"
-	case m.pet.Alive && m.pet.Stats.Happy >= 70:
+	case m.pet.Alive && m.pet.Stats.Health >= sickBelow && m.pet.Stats.Happy >= 70:
 		if m.frame%2 == 0 {
 			return "  ♪"
 		}
@@ -423,7 +458,7 @@ type face struct {
 }
 
 // 告警阈值，与 internal/pet 的 AlertWarn / SickBelow 保持一致
-//（TUI 使用自己的 JSON 类型，不 import 领域层）。
+// （TUI 使用自己的 JSON 类型，不 import 领域层）。
 const (
 	alertWarn = 30
 	sickBelow = 50
@@ -462,7 +497,21 @@ func decorations(p Pet) string {
 	return strings.Join(parts, "  ")
 }
 
-// renderStats 渲染五维属性条 + EXP/阶段。
+// nextStageEXP 是各阶段晋升下一级所需的累计 EXP（与 internal/pet 的 stageThresholds
+// 保持一致；TUI 使用自己的 JSON 类型，不 import 领域层）。成年无下一阶段。
+var nextStageEXP = map[string]int{"egg": 30, "baby": 200, "child": 500}
+
+// expBar 渲染 EXP 迷你进度条：主题色填充 + 轨道，与属性条同一图形语言。
+func expBar(exp, next int) string {
+	filled := 10
+	if next > 0 {
+		filled = max(0, min(10, exp*10/next))
+	}
+	return accentStyle.Render(strings.Repeat("█", filled)) + trackStyle.Render(strings.Repeat("░", 10-filled))
+}
+
+// renderStats 渲染五维属性条 + EXP/阶段：行贴行、靠轨道色分隔（整行空距在
+// 终端里太大），数值与条同阈值色；EXP 前留一空行与属性分组。
 func renderStats(p Pet) string {
 	rows := []struct {
 		label string
@@ -476,24 +525,36 @@ func renderStats(p Pet) string {
 	}
 	var b strings.Builder
 	for _, r := range rows {
-		fmt.Fprintf(&b, "%s %s %3d\n", r.label, bar(r.value), r.value)
+		fmt.Fprintf(&b, "%s  %s %s\n", r.label, bar(r.value),
+			statStyle(r.value).Render(fmt.Sprintf("%3d", r.value)))
 	}
-	fmt.Fprintf(&b, "\nEXP %d   阶段 %s", p.Stats.EXP, stageLabel(p.Stage))
+	// EXP 进度条：晋升阈值见 nextStageEXP；成年满级只显示累计值。
+	if next, ok := nextStageEXP[p.Stage]; ok {
+		fmt.Fprintf(&b, "\nEXP   %s %d/%d · %s", expBar(p.Stats.EXP, next), p.Stats.EXP, next, stageLabel(p.Stage))
+	} else {
+		fmt.Fprintf(&b, "\nEXP   %s %d · %s", expBar(1, 1), p.Stats.EXP, stageLabel(p.Stage))
+	}
 	return b.String()
 }
 
-// bar 渲染 10 格进度条：按值着色（≥60 绿 / 30-59 黄 / <30 红），空格部分暗淡。
+// statStyle 按属性值给阈值色：≥60 绿 / 30-59 黄 / <30 红。
+func statStyle(v int) lipgloss.Style {
+	switch {
+	case v < alertWarn:
+		return dangerStyle
+	case v < 60:
+		return warnStyle
+	default:
+		return successStyle
+	}
+}
+
+// bar 渲染 10 格进度条：填充部分按阈值着色（见 statStyle），
+// 轨道部分用暗轨道色保持可见——隐形轨道会让多行色块糊成一片。
 func bar(v int) string {
 	v = max(0, min(100, v))
 	filled := v / 10
-	style := successStyle
-	switch {
-	case v < alertWarn:
-		style = dangerStyle
-	case v < 60:
-		style = warnStyle
-	}
-	return style.Render(strings.Repeat("█", filled)) + faintStyle.Render(strings.Repeat("░", 10-filled))
+	return statStyle(v).Render(strings.Repeat("█", filled)) + trackStyle.Render(strings.Repeat("░", 10-filled))
 }
 
 // moodWord 是当前心情词（头部展示）。

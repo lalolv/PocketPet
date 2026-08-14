@@ -297,6 +297,84 @@ func TestSleepyStartInterleavingNoTornActivity(t *testing.T) {
 	}
 }
 
+// TestStartWaitsStepMuWithoutHoldingPetLock 回归：start 不得在持 petID 锁时抢 stepMu，
+// 否则与步进结束/换图路径（持 stepMu 抢 petID 锁）形成 AB-BA 死锁。
+func TestStartWaitsStepMuWithoutHoldingPetLock(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t)
+
+	// 模拟步进/换图持有 stepMu 期间，同宠 start 交错进来。
+	env.adv.stepMu.Lock()
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		if _, err := env.adv.start(context.Background(), p.ID); err != nil {
+			t.Errorf("start err: %v", err)
+		}
+	}()
+
+	// start 应先完成活动态提交（需要 petID 锁），再阻塞在 stepMu 上登记行程；
+	// 此时其它需要 petID 锁的操作必须仍能进行（旧实现会在这里卡死）。
+	applied := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !applied {
+		actCh := make(chan string, 1)
+		go func() {
+			act, err := env.engine.Activity(context.Background(), p.ID)
+			if err != nil {
+				actCh <- "err"
+				return
+			}
+			actCh <- act
+		}()
+		select {
+		case act := <-actCh:
+			if act == pet.ActivityAdventuring {
+				applied = true
+			} else {
+				time.Sleep(20 * time.Millisecond)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("pet lock held while start waits on stepMu: AB-BA deadlock")
+		}
+	}
+	if !applied {
+		t.Fatal("start did not commit activity within deadline")
+	}
+
+	env.adv.stepMu.Unlock()
+	select {
+	case <-startDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("start did not finish after stepMu released")
+	}
+	if _, ok, _ := env.adv.getRun(p.ID); !ok {
+		t.Fatal("run should exist after start")
+	}
+}
+
+// TestStartInsertRunFailureRollsBack 回归：登记行程失败时补偿回 idle，不留卡死态。
+func TestStartInsertRunFailureRollsBack(t *testing.T) {
+	env := setup(t)
+	p := env.newPet(t)
+	// 只让 INSERT 失败（SELECT 不受影响），模拟登记行程出错。
+	if _, err := env.st.DB().Exec(`CREATE TRIGGER block_run_insert BEFORE INSERT ON adventure_runs
+		BEGIN SELECT RAISE(ABORT, 'blocked'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := env.adv.start(context.Background(), p.ID)
+	if err == nil || res.OK {
+		t.Fatalf("start = %+v, %v, want error", res, err)
+	}
+	got, err := env.st.GetPet(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Activity == pet.ActivityAdventuring {
+		t.Fatal("activity should roll back to idle when run registration fails")
+	}
+}
+
 func TestMapRefreshAbortsRun(t *testing.T) {
 	env := setup(t)
 	env.adv.MapRefreshTicks = 2

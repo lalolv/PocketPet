@@ -56,6 +56,9 @@ func (a *Adventure) start(ctx context.Context, petID string) (plugin.ToolResult,
 	now := time.Now().UTC()
 	var petName string
 
+	// 锁序约定：只允许 stepMu → petID 锁（步进/换图方向），禁止持 petID 锁再抢
+	// stepMu，否则与步进结束/换图路径形成 AB-BA 死锁。故 OnCommit 不能用来插行程，
+	// 活动态提交后在锁外登记。
 	res, err := a.ctx.Apply(ctx, petID, petstate.Transition{
 		To: pet.ActivityAdventuring, Owner: "adventure", Reason: "start",
 		StatsDelta: pet.Stats{Energy: -cost},
@@ -67,13 +70,6 @@ func (a *Adventure) start(ctx context.Context, petID string) (plugin.ToolResult,
 				}
 				return nil
 			},
-		},
-		OnCommit: func(ctx context.Context, _, _ petstate.Snapshot) error {
-			a.stepMu.Lock()
-			defer a.stepMu.Unlock()
-			return a.insertRun(ctx, Run{
-				PetID: petID, MapID: mapID, NodeID: 0, ChestsFound: []int{}, StartedAt: now,
-			})
 		},
 	})
 	if err != nil {
@@ -97,6 +93,20 @@ func (a *Adventure) start(ctx context.Context, petID string) (plugin.ToolResult,
 			}
 			return plugin.ToolResult{OK: false, Outcome: "现在出不去"}, nil
 		}
+	}
+	// 活动态已提交；在 petID 锁外经 stepMu 登记行程，保证不与步进批/换图交错
+	//（换图会 DELETE 全部行程，交错可能留下"有 Activity 无 run"的卡死态）。
+	a.stepMu.Lock()
+	err = a.insertRun(ctx, Run{
+		PetID: petID, MapID: mapID, NodeID: 0, ChestsFound: []int{}, StartedAt: now,
+	})
+	a.stepMu.Unlock()
+	if err != nil {
+		// 补偿回 idle；若残留行程行（如主键冲突），由步进自愈（无 Activity → aborted）清理。
+		_, _ = a.ctx.Apply(ctx, petID, petstate.Transition{
+			To: pet.ActivityIdle, Owner: "adventure", Reason: "start-rollback",
+		})
+		return plugin.ToolResult{}, err
 	}
 	name := petName
 	if name == "" {

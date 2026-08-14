@@ -85,6 +85,8 @@ const IntentSleep = "sleep"
 type Action string
 
 // 支持的照顾动作。
+// sleep/wake 是活动态切换而非数值动作：由 tick.Engine.Care 路由到
+// petstate.Manager 处理（活动互斥 + 意图排队），领域 Care 不收理。
 const (
 	ActionFeed  Action = "feed"
 	ActionPlay  Action = "play"
@@ -181,8 +183,9 @@ func (p *Pet) lowDuration(h, threshold float64, rates decayRates) float64 {
 	return longest
 }
 
-// Care 执行一个照顾动作，返回产生的事件（含动作事件、边沿告警与晋升）。
+// Care 执行一个数值照顾动作（feed/play/clean），返回产生的事件（含边沿告警与晋升）。
 // 非法动作或状态不允许时返回领域错误，状态不变。使用中性特质。
+// sleep/wake 不在此处理（见 Action 常量注释），传入将返回 ErrUnknownAction。
 func (p *Pet) Care(action Action, now time.Time) ([]Event, error) {
 	return p.CareTraits(action, now, NeutralTraits())
 }
@@ -217,22 +220,6 @@ func (p *Pet) CareTraits(action Action, now time.Time, traits Traits) ([]Event, 
 	case ActionClean:
 		p.Stats.Clean += cleanCleanGain
 		p.Stats.EXP += cleanEXP
-	case ActionSleep:
-		if p.Sleeping || p.Activity == ActivitySleeping {
-			return nil, ErrAlreadySleeping
-		}
-		p.Activity = ActivitySleeping
-		p.ActivityOwner = "core"
-		p.SyncSleepingFromActivity()
-		actionEvs = append(actionEvs, p.newEvent(EventFellAsleep, p.Name+" 睡着了", now))
-	case ActionWake:
-		if !p.Sleeping && p.Activity != ActivitySleeping {
-			return nil, ErrNotSleeping
-		}
-		p.Activity = ActivityIdle
-		p.ActivityOwner = ""
-		p.SyncSleepingFromActivity()
-		actionEvs = append(actionEvs, p.newEvent(EventWokeUp, p.Name+" 醒来了", now))
 	default:
 		return nil, ErrUnknownAction
 	}
@@ -283,9 +270,11 @@ func (p *Pet) refresh(now time.Time) []Event {
 	evs = append(evs, p.checkAlert(&p.Alerts.Sick, p.Stats.Health < SickBelow, EventSick, p.Name+" 看起来生病了", now)...)
 	evs = append(evs, p.checkAlert(&p.Alerts.Sad, p.Stats.Happy < AlertWarn, EventSad, p.Name+" 心情低落，想找人陪陪", now)...)
 
-	// 死亡：健康归零。
+	// 死亡：健康归零。死亡是最高优先级中断，立即回收活动态与排队意图，
+	// 不等插件轮询自愈（否则死宠会在库里永久挂着 adventuring 等活动态）。
 	if p.Alive && p.Stats.Health <= 0 {
 		p.Alive = false
+		p.ReclaimActivityOnDeath()
 		evs = append(evs, p.newEvent(EventDead, p.Name+" 死了……", now))
 	}
 	return evs

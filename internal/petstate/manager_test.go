@@ -79,6 +79,12 @@ func (h *memHost) get(id string) *pet.Pet {
 	return h.pets[id]
 }
 
+func (h *memHost) events() []pet.Event {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]pet.Event(nil), h.evs...)
+}
+
 func TestApplySleepAndWake(t *testing.T) {
 	p := pet.New("p1", "团团", "cat", t0)
 	h := newMemHost(p)
@@ -91,10 +97,16 @@ func TestApplySleepAndWake(t *testing.T) {
 	if !h.get("p1").Sleeping {
 		t.Fatal("Sleeping flag")
 	}
+	if evs := h.events(); len(evs) != 1 || evs[0].Type != pet.EventFellAsleep {
+		t.Fatalf("want fell_asleep event, got %+v", evs)
+	}
 
 	res, err = m.GoIdle(context.Background(), "p1", "wake")
 	if err != nil || !res.OK || res.Snapshot.Activity.Kind != pet.ActivityIdle {
 		t.Fatalf("wake = %+v, %v", res, err)
+	}
+	if evs := h.events(); len(evs) != 2 || evs[1].Type != pet.EventWokeUp {
+		t.Fatalf("want woke_up event, got %+v", evs)
 	}
 }
 
@@ -250,5 +262,101 @@ func TestGoIdleConsumesIntentSleepEvenIfEnergyHigh(t *testing.T) {
 	}
 	if got.HasIntent(pet.IntentSleep) {
 		t.Fatal("IntentSleep should be consumed")
+	}
+}
+
+// 睡觉中拒绝出门探险（转移表：插件 kind 仅 idle 可入）。
+func TestRejectAdventureWhileSleeping(t *testing.T) {
+	p := pet.New("p1", "团团", "cat", t0)
+	p.Stats.Energy = 90
+	h := newMemHost(p)
+	m := New(h)
+	_ = m.RegisterKind(ActivityKind{Name: pet.ActivityAdventuring, Owner: "adventure"})
+
+	if _, err := m.RequestSleep(context.Background(), "p1", "test"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Apply(context.Background(), "p1", Transition{
+		To: pet.ActivityAdventuring, Owner: "adventure",
+	})
+	if err != nil || res.OK || !errors.Is(res.Err, pet.ErrBusy) {
+		t.Fatalf("want busy, got %+v %v", res, err)
+	}
+}
+
+// 死亡是最高优先级中断：探险途中死亡，活动态与排队意图立即回收，
+// 且回 idle 的意图消费不得把死宠再置为 sleeping。
+func TestDeathDuringGoIdleReclaimsWithoutAutoSleep(t *testing.T) {
+	p := pet.New("p1", "团团", "cat", t0)
+	p.Stats.Energy = 90
+	h := newMemHost(p)
+	m := New(h)
+	_ = m.RegisterKind(ActivityKind{Name: pet.ActivityAdventuring, Owner: "adventure"})
+
+	if _, err := m.Apply(context.Background(), "p1", Transition{
+		To: pet.ActivityAdventuring, Owner: "adventure",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := m.RequestSleep(context.Background(), "p1", "autosleep"); err != nil || !res.Queued {
+		t.Fatalf("want queued sleep, got %+v %v", res, err)
+	}
+	// 探险途中被致命 Adjust（如插件结算）带走：死亡回收优先于意图消费。
+	res, err := m.Apply(context.Background(), "p1", Transition{
+		To: pet.ActivityIdle, Owner: "adventure", Reason: "finished",
+		StatsDelta: pet.Stats{Health: -200},
+	})
+	if err != nil || !res.OK {
+		t.Fatalf("go idle = %+v %v", res, err)
+	}
+	got := h.get("p1")
+	if got.Alive {
+		t.Fatal("pet should be dead")
+	}
+	if got.Activity != pet.ActivityIdle || got.ActivityOwner != "" || got.Sleeping {
+		t.Fatalf("activity not reclaimed: act=%q owner=%q sleeping=%v", got.Activity, got.ActivityOwner, got.Sleeping)
+	}
+	if got.HasIntent(pet.IntentSleep) {
+		t.Fatal("dead pet should not keep intents")
+	}
+	for _, e := range h.events() {
+		if e.Type == pet.EventFellAsleep {
+			t.Fatal("dead pet must not auto-sleep")
+		}
+	}
+}
+
+// 历史遗留自愈：旧库中死亡时未回收活动态的宠物，读路径顺手回正。
+func TestDeadPetActivityReclaimedOnView(t *testing.T) {
+	p := pet.New("p1", "团团", "cat", t0)
+	p.Activity = pet.ActivityAdventuring
+	p.ActivityOwner = "adventure"
+	p.AddIntent(pet.IntentSleep)
+	p.Alive = false
+	h := newMemHost(p)
+	m := New(h)
+
+	snap, err := m.View(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Activity.Kind != pet.ActivityIdle {
+		t.Fatalf("want idle, got %q", snap.Activity.Kind)
+	}
+	got := h.get("p1")
+	if got.Activity != pet.ActivityIdle || got.ActivityOwner != "" || got.Sleeping || len(got.Intents) != 0 {
+		t.Fatalf("not reclaimed: act=%q owner=%q sleeping=%v intents=%v",
+			got.Activity, got.ActivityOwner, got.Sleeping, got.Intents)
+	}
+}
+
+// 死宠拒绝 Restore 占用对齐。
+func TestRestoreRejectsDead(t *testing.T) {
+	p := pet.New("p1", "团团", "cat", t0)
+	p.Alive = false
+	h := newMemHost(p)
+	m := New(h)
+	if err := m.Restore(context.Background(), "p1", pet.ActivityAdventuring, "adventure"); !errors.Is(err, pet.ErrDead) {
+		t.Fatalf("want ErrDead, got %v", err)
 	}
 }

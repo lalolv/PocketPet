@@ -114,6 +114,19 @@ func (p *Pet) SyncSleepingFromActivity() {
 	p.Sleeping = p.Activity == ActivitySleeping
 }
 
+// ReclaimActivityOnDeath 死亡时强制回收活动态：死亡是最高优先级中断，
+// 不经 Manager.Apply 的常规守卫（Manager 对死宠一律拒绝切换）。
+// 回收后 Activity=idle、Owner 清空、排队意图作废、Sleeping 归位。
+func (p *Pet) ReclaimActivityOnDeath() {
+	if p == nil || p.Alive {
+		return
+	}
+	p.Activity = ActivityIdle
+	p.ActivityOwner = ""
+	p.Intents = nil
+	p.Sleeping = false
+}
+
 // HasIntent 报告是否已排队某意图。
 func (p *Pet) HasIntent(kind string) bool {
 	for _, i := range p.Intents {

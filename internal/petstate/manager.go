@@ -190,6 +190,9 @@ func (m *Manager) Restore(ctx context.Context, id, kind, owner string) error {
 		return err
 	}
 	p.SyncSleepingFromActivity()
+	if !p.Alive {
+		return pet.ErrDead
+	}
 	if p.Sleeping {
 		return pet.ErrBusy
 	}
@@ -213,16 +216,10 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 	before := SnapshotOf(p)
 
 	if !p.Alive {
-		_ = m.host.SavePet(ctx, p)
-		m.host.Emit(ctx, evs...)
-		m.host.PublishState(p)
-		return Result{Snapshot: before, Err: pet.ErrDead}, nil
+		return m.reject(ctx, p, evs, before, pet.ErrDead)
 	}
 	if p.Incubating() {
-		_ = m.host.SavePet(ctx, p)
-		m.host.Emit(ctx, evs...)
-		m.host.PublishState(p)
-		return Result{Snapshot: before, Err: pet.ErrIncubating}, nil
+		return m.reject(ctx, p, evs, before, pet.ErrIncubating)
 	}
 
 	if t.To == "" {
@@ -253,25 +250,11 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 		cur = pet.ActivityIdle
 	}
 	if cur == to && (to == pet.ActivityIdle || to == pet.ActivitySleeping || p.ActivityOwner == owner) {
-		_ = m.host.SavePet(ctx, p)
-		m.host.Emit(ctx, evs...)
-		m.host.PublishState(p)
-		return Result{Snapshot: before, Err: pet.ErrAlready}, nil
+		return m.reject(ctx, p, evs, before, pet.ErrAlready)
 	}
 
-	busy := false
-	switch {
-	case to == pet.ActivitySleeping && cur != pet.ActivityIdle:
-		busy = true
-	case to != pet.ActivityIdle && to != pet.ActivitySleeping && cur == pet.ActivitySleeping:
-		busy = true
-	case to != pet.ActivityIdle && to != pet.ActivitySleeping && cur != pet.ActivityIdle:
-		busy = true
-	case to != pet.ActivityIdle && to != pet.ActivitySleeping && cur == pet.ActivityIdle && p.Stats.Energy < pet.AlertWarn:
-		busy = true
-	}
-
-	if busy {
+	// 互斥判定查转移策略表（transitions.go）；忙时可选把意图入队而非拒绝。
+	if policyFor(to).blocks(cur, p.Stats.Energy) {
 		if t.QueueIfBusy && t.IntentKind != "" {
 			p.AddIntent(t.IntentKind)
 			p.StateSeq++
@@ -282,10 +265,7 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 			m.host.PublishState(p)
 			return Result{OK: true, Snapshot: SnapshotOf(p), Queued: true}, nil
 		}
-		_ = m.host.SavePet(ctx, p)
-		m.host.Emit(ctx, evs...)
-		m.host.PublishState(p)
-		return Result{Snapshot: before, Err: pet.ErrBusy}, nil
+		return m.reject(ctx, p, evs, before, pet.ErrBusy)
 	}
 
 	for _, g := range t.Guards {
@@ -293,20 +273,14 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 			continue
 		}
 		if err := g(before); err != nil {
-			_ = m.host.SavePet(ctx, p)
-			m.host.Emit(ctx, evs...)
-			m.host.PublishState(p)
-			return Result{Snapshot: before, Err: err}, nil
+			return m.reject(ctx, p, evs, before, err)
 		}
 	}
 
 	if to != pet.ActivityIdle && to != pet.ActivitySleeping {
 		if k, ok := m.kind(to); ok && k.CanEnter != nil {
 			if err := k.CanEnter(before); err != nil {
-				_ = m.host.SavePet(ctx, p)
-				m.host.Emit(ctx, evs...)
-				m.host.PublishState(p)
-				return Result{Snapshot: before, Err: err}, nil
+				return m.reject(ctx, p, evs, before, err)
 			}
 		}
 	}
@@ -357,10 +331,7 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 			p.Stats = rollbackStats
 			p.Alerts = rollbackAlerts
 			p.SyncSleepingFromActivity()
-			_ = m.host.SavePet(ctx, p)
-			m.host.Emit(ctx, evs...)
-			m.host.PublishState(p)
-			return Result{Snapshot: before, Err: err}, nil
+			return m.reject(ctx, p, evs, before, err)
 		}
 	}
 
@@ -368,17 +339,8 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 		_ = afterLeave(ctx, id, t.Reason)
 	}
 
-	if to == pet.ActivityIdle {
-		if p.HasIntent(pet.IntentSleep) || p.Stats.Energy < pet.AlertWarn {
-			p.RemoveIntent(pet.IntentSleep)
-			p.Activity = pet.ActivitySleeping
-			p.ActivityOwner = "core"
-			p.Sleeping = true
-			p.StateSeq++
-			careEvs = append(careEvs, pet.Event{PetID: p.ID, Type: pet.EventFellAsleep, Message: p.Name + " 睡着了", CreatedAt: now})
-			p.SyncSleepingFromActivity()
-		}
-	}
+	// 回 idle 后消费排队意图（如困着走完行程，回来倒头就睡）。
+	careEvs = append(careEvs, consumeIntents(p, now)...)
 
 	if err := m.host.SavePet(ctx, p); err != nil {
 		return Result{}, err
@@ -386,6 +348,14 @@ func (m *Manager) applyLocked(ctx context.Context, id string, t Transition) (Res
 	m.host.Emit(ctx, append(evs, careEvs...)...)
 	m.host.PublishState(p)
 	return Result{OK: true, Snapshot: SnapshotOf(p)}, nil
+}
+
+// reject 统一处理"拒绝切换"：落库 settle 结果、发 settle 事件、返回 before 快照。
+func (m *Manager) reject(ctx context.Context, p *pet.Pet, evs []pet.Event, before Snapshot, err error) (Result, error) {
+	_ = m.host.SavePet(ctx, p)
+	m.host.Emit(ctx, evs...)
+	m.host.PublishState(p)
+	return Result{Snapshot: before, Err: err}, nil
 }
 
 func (m *Manager) settleLocked(ctx context.Context, id string) (*pet.Pet, []pet.Event, error) {
@@ -396,6 +366,10 @@ func (m *Manager) settleLocked(ctx context.Context, id string) (*pet.Pet, []pet.
 	p.SyncSleepingFromActivity()
 	tr := m.host.TraitsOf(id)
 	evs := p.TickTraits(m.host.Now(), m.host.OfflineMax(), tr)
+	if !p.Alive {
+		// 历史遗留自愈：refresh 之前死亡的宠物可能仍挂着活动态，读/写路径顺手回收。
+		p.ReclaimActivityOnDeath()
+	}
 	p.SyncSleepingFromActivity()
 	return p, evs, nil
 }

@@ -30,27 +30,6 @@ func TestCareActions(t *testing.T) {
 			want:   Stats{Hunger: 70, Happy: 80, Clean: 100, Energy: 100, Health: 100, EXP: 1},
 		},
 		{
-			name:   "sleep",
-			action: ActionSleep,
-			want:   Stats{Hunger: 70, Happy: 80, Clean: 80, Energy: 100, Health: 100},
-			check: func(t *testing.T, p *Pet) {
-				if !p.Sleeping {
-					t.Fatal("pet should be sleeping")
-				}
-			},
-		},
-		{
-			name:   "wake",
-			action: ActionWake,
-			mutate: func(p *Pet) { p.Sleeping = true },
-			want:   Stats{Hunger: 70, Happy: 80, Clean: 80, Energy: 100, Health: 100},
-			check: func(t *testing.T, p *Pet) {
-				if p.Sleeping {
-					t.Fatal("pet should be awake")
-				}
-			},
-		},
-		{
 			name:   "play drops hunger below threshold triggers event",
 			action: ActionPlay,
 			mutate: func(p *Pet) { p.Stats.Hunger = 22 },
@@ -90,13 +69,13 @@ func TestCareErrors(t *testing.T) {
 		want   error
 	}{
 		{"unknown action", Action("dance"), nil, ErrUnknownAction},
+		// sleep/wake 是活动态切换，领域 Care 不收理（由 petstate.Manager 经 Engine.Care 处理）。
+		{"sleep not a domain care action", ActionSleep, nil, ErrUnknownAction},
+		{"wake not a domain care action", ActionWake, func(p *Pet) { p.Sleeping = true }, ErrUnknownAction},
 		{"feed while sleeping", ActionFeed, func(p *Pet) { p.Sleeping = true }, ErrSleeping},
 		{"play while sleeping", ActionPlay, func(p *Pet) { p.Sleeping = true }, ErrSleeping},
 		{"play with low energy", ActionPlay, func(p *Pet) { p.Stats.Energy = 9 }, ErrLowEnergy},
-		{"sleep twice", ActionSleep, func(p *Pet) { p.Sleeping = true }, ErrAlreadySleeping},
-		{"wake while awake", ActionWake, nil, ErrNotSleeping},
 		{"dead pet rejects feed", ActionFeed, func(p *Pet) { p.Alive = false }, ErrDead},
-		{"dead pet rejects wake", ActionWake, func(p *Pet) { p.Alive = false; p.Sleeping = true }, ErrDead},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,20 +94,24 @@ func TestCareErrors(t *testing.T) {
 	}
 }
 
-// TestSleepWakeEvents 验证入睡/醒来产生领域事件（M3：梦境整理的触发点）。
-func TestSleepWakeEvents(t *testing.T) {
+// TestDeathReclaimsActivity 死亡是最高优先级中断：回收活动态、清空排队意图。
+func TestDeathReclaimsActivity(t *testing.T) {
 	p := newTestPet()
-	evs, err := p.Care(ActionSleep, t0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertEventTypes(t, evs, EventFellAsleep)
+	p.Activity = ActivityAdventuring
+	p.ActivityOwner = "adventure"
+	p.AddIntent(IntentSleep)
 
-	evs, err = p.Care(ActionWake, t0)
-	if err != nil {
-		t.Fatal(err)
+	evs := p.Adjust(Stats{Health: -200}, t0)
+	if p.Alive {
+		t.Fatal("pet should be dead")
 	}
-	assertEventTypes(t, evs, EventWokeUp)
+	assertEventTypes(t, evs, EventSick, EventDead)
+	if p.Activity != ActivityIdle || p.ActivityOwner != "" || p.Sleeping {
+		t.Fatalf("activity not reclaimed: act=%q owner=%q sleeping=%v", p.Activity, p.ActivityOwner, p.Sleeping)
+	}
+	if len(p.Intents) != 0 {
+		t.Fatalf("intents not cleared: %v", p.Intents)
+	}
 }
 
 // TestAdjust 验证插件用数值调整（M5）：钳制、晋升事件、死亡不生效。

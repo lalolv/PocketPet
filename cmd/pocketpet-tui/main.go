@@ -9,6 +9,7 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/lalolv/PocketPet/internal/tui"
 )
@@ -26,6 +27,8 @@ func main() {
 	}
 
 	m := tui.NewModel(tui.NewClient(base))
+	// 探测终端背景亮度，切换 TUI 色板（亮背景用深色系保证对比度）。
+	tui.SetDarkBackground(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "tui:", err)

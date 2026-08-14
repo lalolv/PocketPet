@@ -618,14 +618,14 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	case "pet.adventure_moved":
 		m.adventuring = true
-		m.action = animAdventure
+		m.action, m.frame = animAdventure, 0 // 打帧相位，避免精灵姿势瞬跳
 		if name := nodeNameFromAdventureMsg(ev.Message); name != "" {
 			m.advNode = name
 		}
 		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	case "pet.adventure_chest":
 		m.adventuring = true
-		m.action = animAdventure
+		m.action, m.frame = animAdventure, 0
 		m.advChests++
 		m.logf("★ %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	case "pet.adventure_finished", "pet.adventure_aborted":

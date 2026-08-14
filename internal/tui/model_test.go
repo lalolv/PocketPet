@@ -178,7 +178,7 @@ func TestAdventureEventsDriveAnimation(t *testing.T) {
 		t.Fatalf("after start: adventuring=%v action=%v", m.adventuring, m.action)
 	}
 	view := m.renderString()
-	if !strings.Contains(view, "探险中") || !strings.Contains(view, "[a]探险") {
+	if !strings.Contains(view, "探险中") || !strings.Contains(view, "喂食") {
 		t.Fatalf("view missing adventure UI:\n%s", view)
 	}
 

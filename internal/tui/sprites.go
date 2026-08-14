@@ -5,7 +5,8 @@ package tui
 // 约定：
 //   - 每帧是多行字符串；{e} 为眼睛占位（3 字符宽），{m} 为嘴部占位（1 字符），
 //     渲染时按当前心情替换（view.go 的 faceFor）。
-//   - 帧统一 3-5 行高、≤14 字符宽，纯 ASCII，避免宽度对齐问题。
+//   - 帧统一 4-5 行高、无尾部空行、≤14 字符宽，纯 ASCII（曾有 6 行的 Play 帧
+//     把精灵区撑高导致整屏抖动；sprites_test.go 会断言这两条约定）。
 //   - Idle/Sleep 为循环帧（按帧号取模）；Eat/Play/Clean 为一次性动作帧。
 
 // sprite 是一个物种的全套帧。
@@ -88,9 +89,7 @@ var sprites = map[string]*sprite{
 			`    *
  /\_/\
 ( {e} )  *
- = {m} =
-
-`,
+ = {m} =`,
 			`      *
  /\_/\ *
 ( {e} )
@@ -182,9 +181,7 @@ var sprites = map[string]*sprite{
 			`   *
  /^ ^\
 ( {e} ) *
- |{m}  )>
-
-`,
+ |{m}  )>`,
 			`     *
  /^ ^\ *
 ( {e} )
@@ -277,9 +274,7 @@ var sprites = map[string]*sprite{
 			`   *
   .--.
  ( {e} ) *
- ( {m}  )
-
-`,
+ ( {m}  )`,
 			`     *
   .--. *
  ( {e} )

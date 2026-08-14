@@ -9,12 +9,7 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// 样式。
-var (
-	headerStyle = lipgloss.NewStyle().Bold(true)
-	faintStyle  = lipgloss.NewStyle().Faint(true)
-	inputStyle  = lipgloss.NewStyle().Bold(true)
-)
+// 样式统一定义在 theme.go。
 
 // logWrapWidth 返回日志区的软换行宽度；尚未拿到终端宽度时不换行。
 func (m model) logWrapWidth() int {
@@ -82,15 +77,17 @@ func (m model) renderSelect() string {
 	for i, p := range m.pets {
 		cursor := "  "
 		if i == m.cursor {
-			cursor = "▶ "
+			cursor = keyStyle.Render("▶") + " "
 		}
-		line := fmt.Sprintf("%s%s（%s · %s · %s）", cursor, p.Name, p.Species, stageLabel(p.Stage), personalityLabel(p.Personality))
+		// 宠物名着物种色，列表即见个性。
+		name := lipgloss.NewStyle().Foreground(speciesColor(p.Species)).Render(p.Name)
+		line := fmt.Sprintf("%s%s（%s · %s · %s）", cursor, name, p.Species, stageLabel(p.Stage), personalityLabel(p.Personality))
 		if !p.Alive {
-			line += " †"
+			line += dangerStyle.Render(" †")
 		}
 		b.WriteString("  " + line + "\n")
 	}
-	b.WriteString("\n  [↑/↓ 或 j/k] 选择    [enter] 进入    [n] 新建宠物    [q] 退出\n")
+	b.WriteString(faintStyle.Render("\n  [↑/↓ 或 j/k] 选择    [enter] 进入    [n] 新建宠物    [q] 退出\n"))
 	return b.String()
 }
 
@@ -99,7 +96,7 @@ func (m model) renderCreate() string {
 	field := func(idx int, label, value string) string {
 		marker := "  "
 		if m.createField == idx {
-			marker = "▶ "
+			marker = keyStyle.Render("▶") + " "
 		}
 		return fmt.Sprintf("  %s%s：%s\n", marker, label, value)
 	}
@@ -112,7 +109,7 @@ func (m model) renderCreate() string {
 	b.WriteString(field(0, "名字", name))
 	b.WriteString(field(1, "物种", "◀ "+speciesOptions[m.createSpeciesIdx]+" ▶"))
 	b.WriteString(field(2, "气质", "◀ "+personalityLabels[personalityOptions[m.createPersonalityIdx]]+" ▶"))
-	b.WriteString("\n  [tab/↑/↓] 切换项    [◀ ▶] 换选项    [enter] 开盲盒    [esc] 返回\n")
+	b.WriteString(faintStyle.Render("\n  [tab/↑/↓] 切换项    [◀ ▶] 换选项    [enter] 开盲盒    [esc] 返回\n"))
 	if len(m.logs) > 0 {
 		b.WriteString(faintStyle.Render("\n  " + m.logs[len(m.logs)-1] + "\n"))
 	}
@@ -130,7 +127,7 @@ func (m model) renderBirth() string {
 	egg := eggs[m.frame%len(eggs)]
 	var b strings.Builder
 	b.WriteString("\n  " + headerStyle.Render("诞生中") + "  " + faintStyle.Render(m.createName) + "\n\n")
-	b.WriteString(egg + "\n\n")
+	b.WriteString(accentStyle.Render(egg) + "\n\n")
 	for _, line := range m.birthLog {
 		b.WriteString("  " + faintStyle.Render(line) + "\n")
 	}
@@ -146,10 +143,10 @@ func (m model) renderBirth() string {
 func (m model) renderMain() string {
 	var b strings.Builder
 
-	// 头部
-	status := moodWord(m.pet)
+	// 头部：宠物名加粗主题色，心情为彩色圆点徽章，活动态徽章着色。
 	header := fmt.Sprintf(" %s · %s · %s · %s · %s",
-		m.pet.Name, m.pet.Species, stageLabel(m.pet.Stage), personalityLabel(m.pet.Personality), status)
+		headerStyle.Foreground(accent).Render(m.pet.Name),
+		m.pet.Species, stageLabel(m.pet.Stage), personalityLabel(m.pet.Personality), moodBadge(m.pet))
 	// 活动态互斥展示：只跟 Snapshot.Activity（死亡 > sleeping > adventuring）。
 	act := m.pet.Activity
 	if act == "" {
@@ -163,37 +160,33 @@ func (m model) renderMain() string {
 	}
 	switch {
 	case !m.pet.Alive:
-		header += " †"
+		header += dangerStyle.Render(" †")
 	case act == "sleeping":
-		header += "（睡觉中）"
+		header += sleepStyle.Render("（睡觉中）")
 	case act == "adventuring":
 		loc := m.advNode
 		if loc == "" {
 			loc = "路上"
 		}
-		header += fmt.Sprintf("（探险中·%s", loc)
+		badge := fmt.Sprintf("（探险中·%s", loc)
 		if m.advChests > 0 {
-			header += fmt.Sprintf("·宝箱×%d", m.advChests)
+			badge += fmt.Sprintf("·宝箱×%d", m.advChests)
 		}
-		header += "）"
+		header += accentStyle.Render(badge + "）")
 	}
-	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(header + "\n")
 	b.WriteString(faintStyle.Render(strings.Repeat("─", max(20, m.width/2))) + "\n")
 
-	// 精灵 + 属性
-	spriteBlock := m.renderSprite()
+	// 精灵卡片（圆角边框 + 物种色，见 theme.go）+ 属性
+	spriteCard := m.spriteCardStyle().Render(m.renderSprite())
 	statsBlock := renderStats(m.pet)
-	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, spriteBlock, "   ", statsBlock) + "\n")
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, spriteCard, "  ", statsBlock) + "\n")
 
-	// 日志区（长行按终端宽度软换行，避免被渲染器裁掉右侧）
+	// 日志区：固定行数窗口（长行按终端宽度软换行，最新内容优先，不足补空行），
+	// 行数恒定后整屏总高度不随日志进出跳动。
 	b.WriteString(faintStyle.Render("── 日志 "+strings.Repeat("─", 12)) + "\n")
-	if len(m.logs) == 0 {
-		b.WriteString(faintStyle.Render("（还没有消息）") + "\n")
-	}
-	for _, l := range m.logs {
-		for _, wl := range wrapText(l, m.logWrapWidth()) {
-			b.WriteString(wl + "\n")
-		}
+	for _, l := range m.renderLogLines() {
+		b.WriteString(l + "\n")
 	}
 	// 流式回复：未收到的部分以光标占位。
 	if m.streaming {
@@ -208,17 +201,47 @@ func (m model) renderMain() string {
 		}
 	}
 
-	// 底部帮助 / 输入行
+	// 底部帮助 / 输入行：胶囊式按键提示（按键主题色、说明暗淡）。
 	if m.chatMode {
 		b.WriteString(inputStyle.Render("> "+m.input+"█") + faintStyle.Render("  （enter 发送，esc 取消）") + "\n")
 	} else if m.streaming {
-		b.WriteString(faintStyle.Render("回复中…… [esc] 中断") + "\n")
+		b.WriteString(faintStyle.Render("回复中…… esc 中断") + "\n")
 	} else if !m.pet.Alive {
-		b.WriteString(faintStyle.Render("[r] 刷新    [q] 退出") + "\n")
+		b.WriteString(" " + keyHint("r", "刷新") + faintStyle.Render("  ·  ") + keyHint("q", "退出") + "\n")
 	} else {
-		b.WriteString(faintStyle.Render("[f]喂食 [p]玩耍 [c]清洁 [a]探险 [s]睡觉 [w]叫醒 [t]聊天 [r]刷新 [q]退出") + "\n")
+		hints := []string{
+			keyHint("f", "喂食"), keyHint("p", "玩耍"), keyHint("c", "清洁"),
+			keyHint("a", "探险"), keyHint("s", "睡觉"), keyHint("w", "叫醒"),
+			keyHint("t", "聊天"), keyHint("r", "刷新"), keyHint("q", "退出"),
+		}
+		b.WriteString(" " + strings.Join(hints, faintStyle.Render(" · ")) + "\n")
 	}
 	return b.String()
+}
+
+// logAreaLines 是日志区的固定行数（按渲染后的行数计，而非日志条目数）。
+const logAreaLines = 8
+
+// renderLogLines 把日志渲染成固定行数的窗口：条目软换行后保留最新若干行，
+// 不足补空行。旧条目被挤出窗口与 maxLogs 的淘汰语义一致。
+func (m model) renderLogLines() []string {
+	var lines []string
+	if len(m.logs) == 0 {
+		lines = append(lines, faintStyle.Render("（还没有消息）"))
+	} else {
+		for _, entry := range m.logs {
+			for _, wl := range wrapText(entry, m.logWrapWidth()) {
+				lines = append(lines, styleLog(entry, wl))
+			}
+		}
+		if len(lines) > logAreaLines {
+			lines = lines[len(lines)-logAreaLines:]
+		}
+	}
+	for len(lines) < logAreaLines {
+		lines = append(lines, "")
+	}
+	return lines
 }
 
 // renderSprite 渲染精灵动画区（含庆祝覆盖与低属性提示装饰）。
@@ -279,15 +302,43 @@ func (m model) renderSprite() string {
 			lines = append(lines, d)
 		}
 	}
-	// 统一左边距并补齐高度，避免布局跳动。
-	const padH = 7
-	for len(lines) < padH {
-		lines = append(lines, "")
-	}
+	// 固定盒子：高度、宽度逐帧恒定——动画只换字符、绝不动布局，
+	// 这是动画期间界面不抖的关键。
+	lines = fitLines(lines, spriteBoxH, spriteBoxW)
 	for i, l := range lines {
 		lines[i] = "  " + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// 精灵区固定盒子尺寸（宽为显示列数，高为行数）。
+const (
+	spriteBoxW = 24 // 覆盖最宽内容：帧 ≤14、探险 banner 13、双项低属性装饰约 23
+	spriteBoxH = 8  // 最坏组合：帧 5 + 探险 banner/footer 2 + 低属性装饰 1
+)
+
+// fitLines 把内容行装进固定盒子：超高截断、不足补空行；
+// 每行按显示宽度截断（超宽加省略号）并右侧补齐到等宽。
+func fitLines(lines []string, height, width int) []string {
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	out := make([]string, 0, height)
+	for _, l := range lines {
+		out = append(out, fitWidth(l, width))
+	}
+	for len(out) < height {
+		out = append(out, strings.Repeat(" ", width))
+	}
+	return out
+}
+
+// fitWidth 把单行按显示宽度截断或右侧补齐到 width 列（CJK 按双宽计）。
+func fitWidth(s string, width int) string {
+	if runewidth.StringWidth(s) > width {
+		s = runewidth.Truncate(s, width, "…")
+	}
+	return s + strings.Repeat(" ", width-runewidth.StringWidth(s))
 }
 
 // adventurePathBanner 探险路径滚动条（表现层动画）。
@@ -368,11 +419,18 @@ func renderStats(p Pet) string {
 	return b.String()
 }
 
-// bar 渲染 10 格进度条。
+// bar 渲染 10 格进度条：按值着色（≥60 绿 / 30-59 黄 / <30 红），空格部分暗淡。
 func bar(v int) string {
 	v = max(0, min(100, v))
 	filled := v / 10
-	return strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
+	style := successStyle
+	switch {
+	case v < alertWarn:
+		style = dangerStyle
+	case v < 60:
+		style = warnStyle
+	}
+	return style.Render(strings.Repeat("█", filled)) + faintStyle.Render(strings.Repeat("░", 10-filled))
 }
 
 // moodWord 是当前心情词（头部展示）。

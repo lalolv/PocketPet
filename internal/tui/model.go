@@ -660,6 +660,8 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 		return m, waitEventCmd(m.sseCh)
 	case "pet.proactive", "pet.dream": // 宠物主动说的话，与聊天回复同格式
 		m.logf("[%s]: %s", m.pet.Name, ev.Message)
+	case "pet.diary_written": // 写日记：宠物的第一人称文字，用 ✎ 区别于随口发言
+		m.logf("✎ %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	case "pet.adventure_started":
 		m.adventuring = true
 		m.action, m.frame = animAdventure, 0

@@ -112,9 +112,10 @@ func main() {
 	})
 
 	petAgent := agent.New(engine, pfs, llmCfg, agent.Options{
-		SkillsDir:  cfg.SkillsDir,
-		MCPServers: cfg.MCPServers,
-		ExtraTools: registry.Tools(),
+		SkillsDir:   cfg.SkillsDir,
+		MCPServers:  cfg.MCPServers,
+		ExtraTools:  registry.Tools(),
+		EventLister: st.RecentEvents,
 	})
 	midwife := &metaagent.Midwife{
 		Engine:       engine,

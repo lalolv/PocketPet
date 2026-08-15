@@ -34,7 +34,7 @@ const (
 	defaultChestMaxPct        = 0.25
 	defaultEnergyCost         = 15.0
 	defaultStepInterval       = 5 * time.Second // 与养成 tick（默认 60s）解耦，适合 TUI 观感
-	themeTimeout              = 30 * time.Second
+	defaultThemeTimeout       = 10 * time.Minute // LLM 主题生成超时：非流式整包返回，慢端点需要宽裕预算
 
 	kvCurrentMapID = "current_map_id"
 )
@@ -50,6 +50,8 @@ type Adventure struct {
 	EnergyCost         float64
 	// StepInterval 是行程步进墙钟间隔；<=0 表示不启后台步进（单测可手动 advanceAllRuns）。
 	StepInterval time.Duration
+	// ThemeTimeout 是单次 LLM 地图主题生成的超时；<=0 取默认值。
+	ThemeTimeout time.Duration
 
 	// Themer 是 LLM 主题生成器（可选）；nil 或失败时地图保持降级词库主题。
 	Themer Themer
@@ -76,6 +78,7 @@ func New() *Adventure {
 		ChestMaxPct:        defaultChestMaxPct,
 		EnergyCost:         defaultEnergyCost,
 		StepInterval:       defaultStepInterval,
+		ThemeTimeout:       defaultThemeTimeout,
 		IntN:               rand.IntN,
 		Float64:            rand.Float64,
 	}

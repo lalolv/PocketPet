@@ -177,7 +177,7 @@ func moodBadge(p Pet) string {
 	return style.Render("● " + word)
 }
 
-// styleLog 按日志条目前缀着色：✔ 绿、✗ 红、★ 黄、宠物发言主题色、事件流水暗淡。
+// styleLog 按日志条目前缀着色：✔ 绿、✗ 红、★/✎ 黄、宠物发言主题色、事件流水暗淡。
 // entry 是完整条目（前缀判定用），line 是折行后的其中一段（被着色对象）。
 func styleLog(entry, line string) string {
 	switch {
@@ -185,7 +185,7 @@ func styleLog(entry, line string) string {
 		return successStyle.Render(line)
 	case strings.HasPrefix(entry, "✗"):
 		return dangerStyle.Render(line)
-	case strings.HasPrefix(entry, "★"):
+	case strings.HasPrefix(entry, "★"), strings.HasPrefix(entry, "✎"):
 		return warnStyle.Render(line)
 	case strings.HasPrefix(entry, "["):
 		return accentStyle.Render(line)

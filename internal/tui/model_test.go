@@ -200,6 +200,13 @@ func TestAdventureEventsDriveAnimation(t *testing.T) {
 		t.Fatalf("logs = %v", m.logs)
 	}
 
+	// 写日记事件：✎ 前缀 + 时间 + 内容
+	m = update(t, m, eventMsg(Event{Type: "pet.diary_written", Message: "团团 写了日记：今天去探险了。", CreatedAt: t0}))
+	last := m.logs[len(m.logs)-1]
+	if !strings.HasPrefix(last, "✎ ") || !strings.Contains(last, "写了日记") {
+		t.Fatalf("diary log line: %q", last)
+	}
+
 	// 探险动画不因普通动作帧数归零
 	for i := 0; i < animActionTicks+2; i++ {
 		m = update(t, m, tickMsg(time.Now()))

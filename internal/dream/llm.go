@@ -49,14 +49,16 @@ const reflectInstruction = `你是宠物的潜意识。宠物睡着时，你负�
   "soul_narrative": "string，新的性格正文（Markdown 段落），无变化则给空串",
   "trait_deltas": {"特质名": 0.05},
   "skill": {"name": "kebab-case", "description": "一句话说明", "instructions": "技能正文"} 或 null,
-  "dream": "string，宠物第一人称的梦境独白（两三句，朦胧、可爱、符合性格）"
+  "dream": "string，宠物第一人称的梦境独白（两三句，朦胧、可爱、符合性格）",
+  "diary": "string，宠物第一人称的今日日记，今天没有值得记的事则给空串"
 }
 
 整理规则：
 1. memory_update：从近期日记提炼值得长期记住的事实（主人的喜好、约定、重要事件），合并进现有长期记忆——去重、更新矛盾条目、保持 Markdown 结构（标题 + 列表）。琐碎日常不写入；没有值得记住的新内容就给空串。
 2. soul_narrative 与 trait_deltas：只有当近期经历显示出稳定的相处模式时才小幅调整性格；大多数时候应保持不变（空串与 {}）。trait_deltas 只能微调现有特质，单步幅度不得超过 0.1。
 3. skill：仅当某类经验在日记中反复出现（至少 3 次）时，才把它沉淀为一个技能（例如主人每晚都说晚安 → goodnight-ritual）；否则给 null。不要产出已存在的技能。
-4. dream：用宠物的第一人称写一小段梦境独白，可以糅合日记里出现过的事。`
+4. dream：用宠物的第一人称写一小段梦境独白，可以糅合日记里出现过的事。
+5. diary：根据"今天的活动记录"判断今天有没有值得写进日记的经历（一次探险、收到礼物、成长晋升等）。有就写一两句第一人称日记——提炼重点与感受，不是逐条流水账，不报数值；平平无奇的一天给空串。写到的事必须来自活动记录或日记，不得编造。`
 
 // buildReflectPrompt 把整理输入装配为 user prompt。
 func buildReflectPrompt(req ReflectRequest) string {
@@ -82,6 +84,15 @@ func buildReflectPrompt(req ReflectRequest) string {
 	for _, j := range req.Journals {
 		b.WriteString(strings.TrimSpace(j) + "\n\n")
 	}
+
+	fmt.Fprintf(&b, "# 今天的活动记录（%d 条）\n", len(req.TodayEvents))
+	if len(req.TodayEvents) == 0 {
+		b.WriteString("（无）\n")
+	}
+	for _, l := range req.TodayEvents {
+		b.WriteString("- " + l + "\n")
+	}
+	b.WriteString("\n")
 
 	b.WriteString("# 已学会的技能\n")
 	if len(req.ExistingSkills) == 0 {
@@ -112,6 +123,7 @@ type reflectJSON struct {
 		Instructions string `json:"instructions"`
 	} `json:"skill"`
 	Dream string `json:"dream"`
+	Diary string `json:"diary"`
 }
 
 // parseReflectResult 容错解析 LLM 输出：提取首个 "{" 到末个 "}" 之间的内容
@@ -131,6 +143,7 @@ func parseReflectResult(text string) (ReflectResult, error) {
 		SoulNarrative: raw.SoulNarrative,
 		TraitDeltas:   raw.TraitDeltas,
 		Dream:         raw.Dream,
+		Diary:         raw.Diary,
 	}
 	if raw.Skill != nil && raw.Skill.Name != "" {
 		res.Skill = &SkillDraft{

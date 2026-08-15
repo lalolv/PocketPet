@@ -73,6 +73,9 @@ func applyAdventure(a *adventure.Adventure, c config.AdventurePluginConfig) {
 			a.StepInterval = time.Duration(*c.StepIntervalSeconds) * time.Second
 		}
 	}
+	if c.ThemeTimeoutSeconds != nil && *c.ThemeTimeoutSeconds > 0 {
+		a.ThemeTimeout = time.Duration(*c.ThemeTimeoutSeconds) * time.Second
+	}
 }
 
 func applyFriends(f *friends.Friends, c config.FriendsPluginConfig) {

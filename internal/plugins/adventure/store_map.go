@@ -73,7 +73,11 @@ func (a *Adventure) refreshMap(ctx context.Context, now time.Time) (*StoredMap, 
 // 失败仅记日志，地图保持降级主题；下一次换图再试。
 func (a *Adventure) upgradeTheme(mapID string, req ThemeRequest) {
 	defer a.themeWg.Done()
-	ctx, cancel := context.WithTimeout(context.Background(), themeTimeout)
+	timeout := a.ThemeTimeout
+	if timeout <= 0 {
+		timeout = defaultThemeTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	th, err := a.Themer.ThemeIsland(ctx, req)
 	if err != nil {

@@ -103,6 +103,7 @@ type AdventurePluginConfig struct {
 	ChestMaxPct               *float64 `yaml:"chest_max_pct"`
 	EnergyCost                *float64 `yaml:"energy_cost"`
 	StepIntervalSeconds       *int     `yaml:"step_interval_seconds"` // 行程步进秒数，默认 5；与养成 tick 无关
+	ThemeTimeoutSeconds       *int     `yaml:"theme_timeout_seconds"` // LLM 地图主题生成超时秒数，默认 600
 }
 
 // FriendsPluginConfig 是交友插件的开关与数值覆盖。

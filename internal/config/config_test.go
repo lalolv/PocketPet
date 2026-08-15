@@ -225,6 +225,7 @@ plugins:
     enabled: false
     map_refresh_interval_seconds: 300
     energy_cost: 20
+    theme_timeout_seconds: 600
   friends:
     enabled: true
     visit_affinity: 7
@@ -244,6 +245,9 @@ plugins:
 	}
 	if cfg.Plugins.Adventure.EnergyCost == nil || *cfg.Plugins.Adventure.EnergyCost != 20 {
 		t.Fatalf("energy_cost = %+v", cfg.Plugins.Adventure.EnergyCost)
+	}
+	if cfg.Plugins.Adventure.ThemeTimeoutSeconds == nil || *cfg.Plugins.Adventure.ThemeTimeoutSeconds != 600 {
+		t.Fatalf("theme_timeout_seconds = %+v", cfg.Plugins.Adventure.ThemeTimeoutSeconds)
 	}
 	if cfg.Plugins.Friends.VisitAffinity == nil || *cfg.Plugins.Friends.VisitAffinity != 7 {
 		t.Fatalf("visit_affinity = %+v", cfg.Plugins.Friends.VisitAffinity)

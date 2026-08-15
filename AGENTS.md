@@ -63,7 +63,7 @@ go test -race ./...
 │   ├── petfs/           # 宠物文件系统：<data>/pets/<id>/ 下 PET/SOUL/INSTRUCTIONS/AGENT/MEMORY.md、memory/ 日记、skills/
 │   ├── agent/           # PetAgent 运行时：每宠物惰性装配 ADK llmagent，指令由 petfs 文件 + 实时状态动态拼装
 │   ├── metaagent/       # MetaAgent 宠物诞生流程（工具/脚本 → LLM → 超时降级，docs/04）
-│   ├── dream/           # 梦境整理器：入睡后异步凝练记忆、演化 SOUL、沉淀 Skill
+│   ├── dream/           # 梦境整理器：入睡后异步写当日日记、凝练记忆、演化 SOUL、沉淀 Skill
 │   ├── proactive/       # 状态驱动主动行为：主动消息、自动入睡/醒来
 │   ├── narrate/         # 叙事层：主人可见文案只能复述 pet 快照 / Apply 结果，禁止臆造活动态
 │   ├── llm/             # LLM 连接工厂（chatmodel/ 为 Chat Completions 适配器）

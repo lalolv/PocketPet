@@ -48,6 +48,10 @@ type statusResult struct {
 	Status string `json:"status" jsonschema:"我当前的身体感受（定性描述，不含数值）"`
 }
 
+type activitiesResult struct {
+	Activities string `json:"activities" jsonschema:"我最近的活动记录（按时间排列的文字描述）"`
+}
+
 // buildTools 装配某只宠物的全部工具：自我行为 + 记忆工具（remember/recall，落到 petfs）。
 // 自我行为只开放 sleep/wake（包装 tick.Engine 的 care 动作，与 REST care 同一领域路径）；
 // 喂食/玩耍/清洁是主人专属的照顾动作（care 通道），宠物只能表达需求，见 INSTRUCTIONS.md。
@@ -113,10 +117,55 @@ func (a *PetAgent) buildTools(petID string) ([]adktool.Tool, error) {
 		return nil, err
 	}
 
+	// 活动记录工具依赖事件查询入口（生产必有；测试未注入时不注册）。
+	if a.opts.EventLister != nil {
+		if err := add(functiontool.New(functiontool.Config{
+			Name:        "recent_activities",
+			Description: "看看自己最近做了什么：最近的活动记录（去了哪里、发现了什么、什么时候睡觉醒来等），按时间排列。",
+		}, func(ctx adkagent.Context, _ noArgs) (activitiesResult, error) {
+			return a.recentActivities(ctx, petID)
+		})); err != nil {
+			return nil, err
+		}
+	}
+
 	// 插件注入的全局工具（M5）：对所有宠物可见，工具内自行按当前宠物路由。
 	tools = append(tools, a.opts.ExtraTools...)
 
 	return tools, nil
+}
+
+// 活动记录的截取参数：先取最近 activitiesFetchLimit 条原始事件，
+// 过滤后保留最近 activitiesShowMax 条给 LLM。
+const (
+	activitiesFetchLimit = 60
+	activitiesShowMax    = 20
+)
+
+// recentActivities 取出并格式化宠物最近的活动记录（过滤身体预警/自述/系统类事件，
+// 见 pet.MemorableEvent）；事件 Message 是第三人称主人视角，由 LLM 自行转换。
+func (a *PetAgent) recentActivities(ctx context.Context, petID string) (activitiesResult, error) {
+	if a.opts.EventLister == nil {
+		return activitiesResult{Activities: "（还没有活动记录）"}, nil
+	}
+	evs, err := a.opts.EventLister(ctx, petID, activitiesFetchLimit)
+	if err != nil {
+		return activitiesResult{}, err
+	}
+	var lines []string
+	for _, e := range evs {
+		if !pet.MemorableEvent(e.Type) || strings.TrimSpace(e.Message) == "" {
+			continue
+		}
+		lines = append(lines, e.CreatedAt.Local().Format("01-02 15:04")+" "+strings.TrimSpace(e.Message))
+	}
+	if len(lines) > activitiesShowMax {
+		lines = lines[len(lines)-activitiesShowMax:]
+	}
+	if len(lines) == 0 {
+		return activitiesResult{Activities: "（最近还没有什么活动记录）"}, nil
+	}
+	return activitiesResult{Activities: strings.Join(lines, "\n")}, nil
 }
 
 // selfCare 执行一个自我行为动作（与 REST care 同一领域路径）。

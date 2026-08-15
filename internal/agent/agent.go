@@ -60,6 +60,10 @@ type Options struct {
 	// ExtraTools 是注入全部宠物的全局工具（M5 插件体系，由 plugin.Registry.Tools 收集）。
 	// 对所有宠物可见；工具内用 plugin.PetIDOf(ctx) 取当前宠物 ID（agent 名约定 pet_<id>）。
 	ExtraTools []adktool.Tool
+
+	// EventLister 查询宠物最近的事件流水（生产接 store.Store.RecentEvents），
+	// 供 recent_activities 工具使用；nil 时不注册该工具。
+	EventLister func(ctx context.Context, petID string, limit int) ([]pet.Event, error)
 }
 
 // PetAgent 管理全部宠物的 Agent 运行时（petID → runner，惰性创建，线程安全）。

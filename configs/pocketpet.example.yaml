@@ -60,6 +60,7 @@ plugins:
     # chest_max_pct: 0.25
     # energy_cost: 15
     # step_interval_seconds: 5  # 行程步进（墙钟秒）；与养成 tick 无关
+    # theme_timeout_seconds: 600  # LLM 地图主题生成超时（秒），默认 10 分钟
   friends:
     enabled: true
     # visit_affinity: 5

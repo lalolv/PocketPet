@@ -1,6 +1,7 @@
 // Package dream 是梦境整理器：宠物入睡（pet.fell_asleep）后异步触发，
-// 读取近期日记与长期记忆，经 Reflector（LLM 抽象）凝练 MEMORY.md、
-// 小幅演化 SOUL.md（带护栏与历史归档）、沉淀反复经验为 Skill、生成梦境独白。
+// 读取近期日记、长期记忆与当日活动记录，经 Reflector（LLM 抽象）写当日日记、
+// 凝练 MEMORY.md、小幅演化 SOUL.md（带护栏与历史归档）、沉淀反复经验为 Skill、
+// 生成梦境独白。
 // LLM 不可用或调用失败时静默跳过，不影响睡眠与精力恢复。
 package dream
 
@@ -21,6 +22,7 @@ import (
 // 整理参数与护栏常量。
 const (
 	journalDays        = 7               // 吸收的近期日记天数
+	todayEventsMax     = 50              // 当日活动记录的事件条数上限
 	minEntriesForSkill = 3               // 顿悟门槛：日记条目数下限（少于则不允许产技能）
 	maxTraitStep       = 0.1             // SOUL 特质权重单步变化上限（护栏）
 	dreamNoteMaxRunes  = 200             // 睡醒便签中梦境摘要的字符上限
@@ -45,6 +47,7 @@ type ReflectRequest struct {
 	Journals             []string           // 最近 journalDays 天的日记全文
 	JournalEntries       int                // 日记条目总数（"- " 行数，顿悟门槛判定用）
 	ExistingSkills       []string           // 已学会的技能名（避免重复产出）
+	TodayEvents          []string           // 今天的活动记录（"15:04 事件描述"，已过滤噪声事件）
 }
 
 // SkillDraft 是一个待沉淀的技能（遵循 ADK SKILL.md 规范：name/description/正文指令）。
@@ -61,6 +64,7 @@ type ReflectResult struct {
 	TraitDeltas   map[string]float64 // 特质权重调整量（会被 maxTraitStep 钳制）
 	Skill         *SkillDraft        // nil = 本次不沉淀技能
 	Dream         string             // 第一人称梦境独白；空 = 无
+	Diary         string             // 第一人称今日日记条目；空 = 今天不值得记
 }
 
 // Organizer 监听领域事件并驱动整理流程；实现 tick.EventSink。
@@ -141,7 +145,7 @@ func (o *Organizer) Organize(ctx context.Context, petID string) error {
 		ref = &LLMReflector{Cfg: cfg}
 	}
 
-	req := o.gather(petID, p)
+	req := o.gather(ctx, petID, p)
 	res, err := ref.Reflect(ctx, req)
 	if err != nil {
 		slog.Warn("dream: reflect failed, skip", "pet", petID, "err", err)
@@ -161,7 +165,7 @@ func (o *Organizer) resolveCfg(petID string) llm.Config {
 }
 
 // gather 收集整理输入；单个文件读取失败只跳过对应部分。
-func (o *Organizer) gather(petID string, p *pet.Pet) ReflectRequest {
+func (o *Organizer) gather(ctx context.Context, petID string, p *pet.Pet) ReflectRequest {
 	req := ReflectRequest{Name: p.Name, Species: p.Species, Stage: string(p.Stage)}
 	if doc, err := o.fs.ReadSoulDoc(petID); err == nil {
 		req.Traits = doc.Traits
@@ -185,10 +189,25 @@ func (o *Organizer) gather(petID string, p *pet.Pet) ReflectRequest {
 		req.JournalEntries += strings.Count(c, "\n- ")
 	}
 	req.ExistingSkills, _ = o.fs.ListSkills(petID)
+
+	// 当日活动记录（日记提炼素材；噪声过滤与 recent_activities 工具同为 pet.MemorableEvent）。
+	now := time.Now()
+	if o.Now != nil {
+		now = o.Now()
+	}
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if evs, err := o.st.RecentEvents(ctx, petID, todayEventsMax); err == nil {
+		for _, e := range evs {
+			if !pet.MemorableEvent(e.Type) || strings.TrimSpace(e.Message) == "" || e.CreatedAt.Before(dayStart) {
+				continue
+			}
+			req.TodayEvents = append(req.TodayEvents, e.CreatedAt.Local().Format("15:04")+" "+strings.TrimSpace(e.Message))
+		}
+	}
 	return req
 }
 
-// apply 落地整理产物：凝练记忆 → 演化 SOUL → 沉淀技能 → 做梦，最后推送事件。
+// apply 落地整理产物：凝练记忆 → 演化 SOUL → 沉淀技能 → 写日记 → 做梦，最后推送事件。
 // 每个文件写入各自持锁、单次写完，对话侧不会读到写了一半的文件。
 func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, res ReflectResult) {
 	now := time.Now()
@@ -197,7 +216,7 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 	}
 	var evs []pet.Event
 	note := basicWakeNote
-	var memoryUpdated, soulEvolved, dreamed bool
+	var memoryUpdated, soulEvolved, dreamed, diaryWritten bool
 	var skillLearned string
 
 	// 1. 凝练：LLM 给出完整新版 MEMORY.md 才替换。
@@ -247,7 +266,20 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 		}
 	}
 
-	// 4. 做梦：梦境独白进日记 + pet.dream 事件 + 写进睡醒便签。
+	// 4. 写日记：LLM 判断今天值得记，落一条提炼后的当日日记
+	// （先于做梦条目，保持"先回顾白天、后夜里做梦"的顺序），并发事件让主人能在日志流里看到。
+	if d := strings.TrimSpace(res.Diary); d != "" {
+		if err := o.fs.AppendJournal(p.ID, d, now); err != nil {
+			slog.Warn("dream: append diary failed", "pet", p.ID, "err", err)
+		} else {
+			diaryWritten = true
+			evs = append(evs, pet.Event{PetID: p.ID, Type: pet.EventDiaryWritten,
+				Message: p.Name + " 写了日记：" + d, CreatedAt: now})
+			note += "\n你把今天值得记的事写进了日记。"
+		}
+	}
+
+	// 5. 做梦：梦境独白进日记 + pet.dream 事件 + 写进睡醒便签。
 	if d := strings.TrimSpace(res.Dream); d != "" {
 		if err := o.fs.AppendJournal(p.ID, "做梦："+d, now); err != nil {
 			slog.Warn("dream: append dream journal failed", "pet", p.ID, "err", err)
@@ -257,7 +289,7 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 		note += "\n你做了一个梦：" + truncateRunes(d, dreamNoteMaxRunes)
 	}
 
-	// 5. 更新睡醒便签（覆盖入睡时写的基础版）并推送事件。
+	// 6. 更新睡醒便签（覆盖入睡时写的基础版）并推送事件。
 	if err := o.fs.WriteWakeNote(p.ID, note+"\n"); err != nil {
 		slog.Warn("dream: update wake note failed", "pet", p.ID, "err", err)
 	}
@@ -267,6 +299,7 @@ func (o *Organizer) apply(ctx context.Context, p *pet.Pet, req ReflectRequest, r
 	slog.Info("dream: organized", "pet", p.ID,
 		"memory_updated", memoryUpdated,
 		"soul_evolved", soulEvolved,
+		"diary_written", diaryWritten,
 		"skill_learned", skillLearned,
 		"dreamed", dreamed,
 	)

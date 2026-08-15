@@ -65,7 +65,7 @@ func setup(t *testing.T) *testEnv {
 	sink := &fakeSink{}
 	fs := petfs.New(t.TempDir())
 	adv := New()
-	adv.MapRefreshTicks = 100
+	adv.MapRefreshInterval = 24 * time.Hour // 测试默认不自动换图，需要时用短周期覆盖
 	adv.NodeCount = 6
 	adv.MaxBranches = 3
 	adv.StepInterval = 0 // 单测手动 advanceAllRuns，不启墙钟步进
@@ -377,13 +377,16 @@ func TestStartInsertRunFailureRollsBack(t *testing.T) {
 
 func TestMapRefreshAbortsRun(t *testing.T) {
 	env := setup(t)
-	env.adv.MapRefreshTicks = 2
+	env.adv.MapRefreshInterval = time.Minute
 	p := env.newPet(t)
 	if _, err := env.adv.start(context.Background(), p.ID); err != nil {
 		t.Fatal(err)
 	}
-	env.clock.Advance(time.Minute)
-	env.engine.TickAll(context.Background())
+	// Init 建图用的是真实墙钟；把建图时间回拨到 fake clock 之前，模拟地图已到期。
+	if _, err := env.st.DB().Exec(`UPDATE adventure_maps SET created_at = ?`,
+		t0.Add(-2*time.Minute).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
 	env.clock.Advance(time.Minute)
 	env.engine.TickAll(context.Background())
 
@@ -427,6 +430,13 @@ func TestRoutes(t *testing.T) {
 	if mapBody["node_count"].(float64) != 6 {
 		t.Fatalf("map = %v", mapBody)
 	}
+	if mapBody["island_name"] == "" || mapBody["theme"] == "" {
+		t.Fatalf("map missing island theme: %v", mapBody)
+	}
+	node0 := mapBody["nodes"].([]any)[0].(map[string]any)
+	if node0["description"] == "" || node0["zone"] == "" {
+		t.Fatalf("node missing theme fields: %v", node0)
+	}
 
 	resp2, err := http.Get(ts.URL + "/v1/plugins/adventure/pets/" + p.ID + "/run")
 	if err != nil {
@@ -439,6 +449,9 @@ func TestRoutes(t *testing.T) {
 	}
 	if runBody["adventuring"] != true {
 		t.Fatalf("run = %v", runBody)
+	}
+	if runBody["island_name"] == "" || runBody["node_desc"] == "" || runBody["node_zone"] == "" {
+		t.Fatalf("run missing theme fields: %v", runBody)
 	}
 
 	// POST start 在已探险时拒绝

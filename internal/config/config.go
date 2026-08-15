@@ -94,14 +94,15 @@ type PluginsConfig struct {
 
 // AdventurePluginConfig 是探险插件的开关与数值覆盖。
 type AdventurePluginConfig struct {
-	Enabled             *bool    `yaml:"enabled"`
-	MapRefreshTicks     *int     `yaml:"map_refresh_ticks"`
-	NodeCount           *int     `yaml:"node_count"`
-	MaxBranches         *int     `yaml:"max_branches"`
-	ChestMinPct         *float64 `yaml:"chest_min_pct"`
-	ChestMaxPct         *float64 `yaml:"chest_max_pct"`
-	EnergyCost          *float64 `yaml:"energy_cost"`
-	StepIntervalSeconds *int     `yaml:"step_interval_seconds"` // 行程步进秒数，默认 5；与养成 tick 无关
+	Enabled *bool `yaml:"enabled"`
+	// MapRefreshIntervalSeconds 是自动换图墙钟秒数，默认 21600（6 小时）；<=0 关闭自动换图。
+	MapRefreshIntervalSeconds *int     `yaml:"map_refresh_interval_seconds"`
+	NodeCount                 *int     `yaml:"node_count"`
+	MaxBranches               *int     `yaml:"max_branches"`
+	ChestMinPct               *float64 `yaml:"chest_min_pct"`
+	ChestMaxPct               *float64 `yaml:"chest_max_pct"`
+	EnergyCost                *float64 `yaml:"energy_cost"`
+	StepIntervalSeconds       *int     `yaml:"step_interval_seconds"` // 行程步进秒数，默认 5；与养成 tick 无关
 }
 
 // FriendsPluginConfig 是交友插件的开关与数值覆盖。

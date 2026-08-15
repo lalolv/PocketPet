@@ -3,7 +3,8 @@ package adventure
 import "github.com/lalolv/PocketPet/internal/store"
 
 // Migrations 实现 plugin.SchemaProvider。
-// v1：旧版倒计时探险；v2：图结构地图（丢掉旧状态表与背包表）。
+// v1：旧版倒计时探险；v2：图结构地图（丢掉旧状态表与背包表）；
+// v3：地图主题（岛名/主题、地点描述/地带/要素，docs/08）。
 func (a *Adventure) Migrations() []store.Migration {
 	return []store.Migration{
 		`CREATE TABLE adventure_active (
@@ -48,5 +49,10 @@ func (a *Adventure) Migrations() []store.Migration {
 			chests_found TEXT NOT NULL DEFAULT '[]',
 			started_at   TEXT NOT NULL
 		);`,
+		`ALTER TABLE adventure_maps ADD COLUMN island_name TEXT NOT NULL DEFAULT '';
+		ALTER TABLE adventure_maps ADD COLUMN theme TEXT NOT NULL DEFAULT '';
+		ALTER TABLE adventure_nodes ADD COLUMN description TEXT NOT NULL DEFAULT '';
+		ALTER TABLE adventure_nodes ADD COLUMN zone TEXT NOT NULL DEFAULT '';
+		ALTER TABLE adventure_nodes ADD COLUMN elements TEXT NOT NULL DEFAULT '[]';`,
 	}
 }

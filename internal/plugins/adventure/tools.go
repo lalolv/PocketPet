@@ -112,11 +112,13 @@ func (a *Adventure) start(ctx context.Context, petID string) (plugin.ToolResult,
 	if name == "" {
 		name = res.Snapshot.Name
 	}
+	startNode := sm.Graph.Nodes[0]
 	a.ctx.Emit(ctx, pet.Event{
 		PetID: petID, Type: EventStarted,
-		Message: name + " 从【入口】出发去探险了", CreatedAt: now,
+		Message: fmt.Sprintf("%s 从【%s】出发去【%s】探险了", name, startNode.Name, sm.Graph.IslandName),
+		CreatedAt: now,
 	})
-	return plugin.ToolResult{OK: true, Outcome: "我从入口出发去探险了！会沿着道路一步步前进"}, nil
+	return plugin.ToolResult{OK: true, Outcome: fmt.Sprintf("我从【%s】的【%s】出发去探险了！会沿着道路一步步前进", sm.Graph.IslandName, startNode.Name)}, nil
 }
 
 var errLowEnergy = errors.New("low energy")
@@ -128,7 +130,8 @@ func (a *Adventure) status(ctx context.Context, petID string) (plugin.ToolResult
 		sb.WriteString("现在没有探险地图。")
 		return plugin.ToolResult{OK: true, Outcome: sb.String()}, nil
 	}
-	fmt.Fprintf(&sb, "当前地图有 %d 个地点、%d 个宝箱。", len(sm.Graph.Nodes), sm.Graph.ChestCount())
+	fmt.Fprintf(&sb, "当前地图是【%s】：%s 共 %d 个地点、%d 个宝箱。",
+		sm.Graph.IslandName, sm.Graph.Theme, len(sm.Graph.Nodes), sm.Graph.ChestCount())
 
 	r, ok, err := a.getRun(petID)
 	if err != nil {
@@ -142,6 +145,9 @@ func (a *Adventure) status(ctx context.Context, petID string) (plugin.ToolResult
 	branches := len(sm.Graph.OutNeighbors(r.NodeID))
 	fmt.Fprintf(&sb, "我正在【%s】，前方有 %d 条路可走，已经发现 %d 个宝箱。",
 		node.Name, branches, len(r.ChestsFound))
+	if node.Description != "" {
+		fmt.Fprintf(&sb, "%s：%s", node.Name, node.Description)
+	}
 	return plugin.ToolResult{OK: true, Outcome: strings.TrimSpace(sb.String())}, nil
 }
 

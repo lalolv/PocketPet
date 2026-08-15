@@ -69,9 +69,12 @@ func (a *Adventure) handleCurrentMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type nodeView struct {
-		ID       int    `json:"id"`
-		Name     string `json:"name"`
-		HasChest bool   `json:"has_chest"`
+		ID          int      `json:"id"`
+		Name        string   `json:"name"`
+		HasChest    bool     `json:"has_chest"`
+		Description string   `json:"description,omitempty"`
+		Zone        string   `json:"zone,omitempty"`
+		Elements    []string `json:"elements,omitempty"`
 	}
 	type edgeView struct {
 		From int `json:"from"`
@@ -79,7 +82,10 @@ func (a *Adventure) handleCurrentMap(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes := make([]nodeView, 0, len(sm.Graph.Nodes))
 	for _, n := range sm.Graph.Nodes {
-		nodes = append(nodes, nodeView{ID: n.ID, Name: n.Name, HasChest: n.HasChest})
+		nodes = append(nodes, nodeView{
+			ID: n.ID, Name: n.Name, HasChest: n.HasChest,
+			Description: n.Description, Zone: n.Zone, Elements: n.Elements,
+		})
 	}
 	edges := make([]edgeView, 0, len(sm.Graph.Edges))
 	for _, e := range sm.Graph.Edges {
@@ -88,6 +94,8 @@ func (a *Adventure) handleCurrentMap(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"map_id":      sm.ID,
 		"created_at":  sm.CreatedAt.UTC(),
+		"island_name": sm.Graph.IslandName,
+		"theme":       sm.Graph.Theme,
 		"node_count":  len(nodes),
 		"chest_count": sm.Graph.ChestCount(),
 		"nodes":       nodes,
@@ -120,22 +128,28 @@ func (a *Adventure) writeRunJSON(w http.ResponseWriter, r *http.Request, id stri
 		})
 		return
 	}
-	nodeName := ""
+	nodeName, nodeDesc, nodeZone, islandName := "", "", "", ""
 	branches := 0
 	if sm, err := a.loadMap(r.Context(), run.MapID); err == nil {
+		islandName = sm.Graph.IslandName
 		if n, ok := nodeByID(sm.Graph, run.NodeID); ok {
 			nodeName = n.Name
+			nodeDesc = n.Description
+			nodeZone = n.Zone
 		}
 		branches = len(sm.Graph.OutNeighbors(run.NodeID))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"pet_id":       id,
-		"adventuring":  true,
-		"map_id":       run.MapID,
-		"node_id":      run.NodeID,
-		"node_name":    nodeName,
-		"branches":     branches,
-		"chests_found": run.ChestsFound,
-		"started_at":   run.StartedAt.UTC(),
+		"pet_id":          id,
+		"adventuring":     true,
+		"map_id":          run.MapID,
+		"island_name":     islandName,
+		"node_id":         run.NodeID,
+		"node_name":       nodeName,
+		"node_desc":       nodeDesc,
+		"node_zone":       nodeZone,
+		"branches":        branches,
+		"chests_found":    run.ChestsFound,
+		"started_at":      run.StartedAt.UTC(),
 	})
 }

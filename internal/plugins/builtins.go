@@ -22,6 +22,11 @@ func Build(cfg config.Config) []plugin.Plugin {
 	if cfg.AdventureEnabled() {
 		adv := adventure.New()
 		applyAdventure(adv, cfg.Plugins.Adventure)
+		// LLM 已配置时启用地图主题生成（岛名/地点名/描述，docs/08）；
+		// 未配置则保持 nil，换图只用降级词库。
+		if cfg.LLM.Configured() {
+			adv.Themer = adventure.LLMThemer{Cfg: cfg.LLM}
+		}
 		out = append(out, adv)
 		slog.Info("plugin enabled", "name", "adventure")
 	} else {
@@ -39,8 +44,12 @@ func Build(cfg config.Config) []plugin.Plugin {
 }
 
 func applyAdventure(a *adventure.Adventure, c config.AdventurePluginConfig) {
-	if c.MapRefreshTicks != nil && *c.MapRefreshTicks > 0 {
-		a.MapRefreshTicks = *c.MapRefreshTicks
+	if c.MapRefreshIntervalSeconds != nil {
+		if *c.MapRefreshIntervalSeconds <= 0 {
+			a.MapRefreshInterval = 0
+		} else {
+			a.MapRefreshInterval = time.Duration(*c.MapRefreshIntervalSeconds) * time.Second
+		}
 	}
 	if c.NodeCount != nil && *c.NodeCount > 0 {
 		a.NodeCount = *c.NodeCount

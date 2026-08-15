@@ -212,6 +212,56 @@ func TestAdventureEventsDriveAnimation(t *testing.T) {
 	if m.adventuring || m.action != animIdle {
 		t.Fatalf("after finish: adventuring=%v action=%v", m.adventuring, m.action)
 	}
+	if m.advIsland != "" {
+		t.Fatalf("advIsland should be cleared, got %q", m.advIsland)
+	}
+}
+
+// TestAdventureThemeInfo 验证地图主题信息进入 TUI：岛名进 badge/footer、地点描述进日志。
+func TestAdventureThemeInfo(t *testing.T) {
+	m := NewModel(NewClient("http://unused"))
+	m.screen = screenMain
+	m.pet = testPet()
+	m.sseCh = make(chan Event, 1)
+
+	m = update(t, m, currentMapMsg(CurrentMap{
+		IslandName: "雾鸣岛", NodeCount: 3, ChestCount: 1,
+		Nodes: []MapNodeView{
+			{ID: 0, Name: "碎浪滩", Description: "登陆点的黑色沙滩上铺满被潮水磨圆的火山石，风带咸味。", Zone: "海岸带"},
+			{ID: 1, Name: "潮声湾", Description: "礁石上布满贝壳与藤壶，潮池里映着破碎的天光。", Zone: "海岸带"},
+		},
+	}))
+	if m.island != "雾鸣岛" {
+		t.Fatalf("island = %q", m.island)
+	}
+	foundIslandLog := false
+	for _, l := range m.logs {
+		if strings.Contains(l, "当前岛屿：雾鸣岛") {
+			foundIslandLog = true
+		}
+	}
+	if !foundIslandLog {
+		t.Fatalf("logs = %v", m.logs)
+	}
+
+	m = update(t, m, eventMsg(Event{Type: "pet.adventure_started", Message: "团团 从【碎浪滩】出发去【雾鸣岛】探险了", CreatedAt: t0}))
+	if m.advNode != "碎浪滩" || m.advIsland != "雾鸣岛" {
+		t.Fatalf("advNode=%q advIsland=%q", m.advNode, m.advIsland)
+	}
+	if view := m.renderString(); !strings.Contains(view, "雾鸣岛") {
+		t.Fatalf("badge missing island:\n%s", view)
+	}
+
+	m = update(t, m, eventMsg(Event{Type: "pet.adventure_moved", Message: "团团 走到了【潮声湾】", CreatedAt: t0}))
+	foundDesc := false
+	for _, l := range m.logs {
+		if strings.Contains(l, "礁石上布满贝壳") {
+			foundDesc = true
+		}
+	}
+	if !foundDesc {
+		t.Fatalf("moved log missing description: %v", m.logs)
+	}
 }
 
 func TestActivityHeaderExclusive(t *testing.T) {

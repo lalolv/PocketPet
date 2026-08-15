@@ -83,7 +83,10 @@ type model struct {
 	petLoading  bool // 首次进入主界面尚未拿到状态
 	adventuring bool // 探险进行中（动画循环）
 	advNode     string
+	advIsland   string            // 探险所在岛名（主题化后随事件/run 快照更新）
 	advChests   int
+	island      string            // 当前岛名（idle 展示用；空 = 未拉取或无地图）
+	mapDescs    map[string]string // 当前地图：地点名 → 描述（moved 事件日志附带）
 
 	// 流式聊天
 	streaming  bool               // 正在接收回复流
@@ -119,6 +122,7 @@ type (
 	}
 	adventureResultMsg AdventureRun
 	adventureStatusMsg AdventureRun
+	currentMapMsg      CurrentMap // 当前地图（拉取失败时 IslandName 为空，静默忽略）
 )
 
 // chatEvent 是聊天流上的一条消息：文本块、结束（含完整回复）或错误。
@@ -202,6 +206,17 @@ func adventureStatusCmd(c *Client, id string) tea.Cmd {
 			return nil // 插件未启用等：忽略
 		}
 		return adventureStatusMsg(run)
+	}
+}
+
+// currentMapCmd 拉当前探险地图（岛名/地点描述）；插件未启用或无地图时静默忽略。
+func currentMapCmd(c *Client) tea.Cmd {
+	return func() tea.Msg {
+		cm, err := c.GetCurrentMap(context.Background())
+		if err != nil {
+			return nil
+		}
+		return currentMapMsg(cm)
 	}
 }
 
@@ -345,7 +360,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.pet.Alive {
 			m.logf("%s 已经不在了……（RIP）", m.pet.Name)
 		}
-		return m, adventureStatusCmd(m.client, m.pet.ID)
+		return m, tea.Batch(adventureStatusCmd(m.client, m.pet.ID), currentMapCmd(m.client))
 
 	case careResultMsg:
 		m.pet = msg.pet
@@ -366,6 +381,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case adventureStatusMsg:
 		m.applyAdventureRun(AdventureRun(msg))
+		return m, nil
+
+	case currentMapMsg:
+		m.applyCurrentMap(CurrentMap(msg))
 		return m, nil
 
 	case chatEventMsg:
@@ -624,7 +643,7 @@ func (m model) onMainKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.action, m.frame = animAdventure, 0
 		return m, startAdventureCmd(m.client, m.pet.ID)
 	case "r":
-		return m, tea.Batch(getPetCmd(m.client, m.pet.ID), adventureStatusCmd(m.client, m.pet.ID))
+		return m, tea.Batch(getPetCmd(m.client, m.pet.ID), adventureStatusCmd(m.client, m.pet.ID), currentMapCmd(m.client))
 	}
 	return m, nil
 }
@@ -644,7 +663,14 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 	case "pet.adventure_started":
 		m.adventuring = true
 		m.action, m.frame = animAdventure, 0
-		m.advNode = "入口"
+		// 文案为「X 从【出发地】出发去【岛名】探险了」：取第一个【】为地点、第二个为岛名。
+		parts := bracketsIn(ev.Message)
+		if len(parts) > 0 {
+			m.advNode = parts[0]
+		}
+		if len(parts) > 1 {
+			m.advIsland = parts[1]
+		}
 		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
 	case "pet.adventure_moved":
 		m.adventuring = true
@@ -653,6 +679,9 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 			m.advNode = name
 		}
 		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
+		if desc := m.mapDescs[m.advNode]; desc != "" {
+			m.logf("  %s", desc)
+		}
 	case "pet.adventure_chest":
 		m.adventuring = true
 		m.action, m.frame = animAdventure, 0
@@ -662,7 +691,10 @@ func (m model) onEvent(ev Event) (tea.Model, tea.Cmd) {
 		m.adventuring = false
 		m.action, m.frame = animIdle, 0
 		m.advNode = ""
+		m.advIsland = ""
 		m.logf("• %s %s", ev.CreatedAt.Local().Format("15:04"), ev.Message)
+		// 探险结束（尤其换图中断）后岛可能已换：顺手拉一次当前地图。
+		return m, tea.Batch(waitEventCmd(m.sseCh), currentMapCmd(m.client))
 	case "pet.born":
 		if m.screen == screenBirth && !m.birthReady {
 			m.birthReady = true
@@ -830,20 +862,55 @@ func (m *model) applyAdventureRun(run AdventureRun) {
 	if run.Adventuring {
 		m.action = animAdventure
 		m.advNode = run.NodeName
+		m.advIsland = run.IslandName
 		m.advChests = len(run.ChestsFound)
 	} else if m.action == animAdventure {
 		m.action, m.frame = animIdle, 0
 		m.advNode = ""
+		m.advIsland = ""
 		m.advChests = 0
 	}
 }
 
+// applyCurrentMap 缓存当前地图：岛名（idle 展示）与地点名 → 描述（moved 日志附带）。
+func (m *model) applyCurrentMap(cm CurrentMap) {
+	m.mapDescs = make(map[string]string, len(cm.Nodes))
+	for _, n := range cm.Nodes {
+		if n.Description != "" {
+			m.mapDescs[n.Name] = n.Description
+		}
+	}
+	if cm.IslandName != m.island {
+		m.island = cm.IslandName
+		if cm.IslandName != "" {
+			m.logf("· 当前岛屿：%s（%d 个地点 · %d 个宝箱）", cm.IslandName, cm.NodeCount, cm.ChestCount)
+		}
+	}
+}
+
+// bracketsIn 提取文案中所有【…】内容（顺序保留）。
+func bracketsIn(msg string) []string {
+	var out []string
+	rest := msg
+	for {
+		i := strings.Index(rest, "【")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(rest[i+len("【"):], "】")
+		if j < 0 {
+			break
+		}
+		out = append(out, rest[i+len("【"):i+len("【")+j])
+		rest = rest[i+len("【")+j+len("】"):]
+	}
+	return out
+}
+
 // nodeNameFromAdventureMsg 从「…走到了【地点名】」类文案提取地点。
 func nodeNameFromAdventureMsg(msg string) string {
-	i := strings.Index(msg, "【")
-	j := strings.Index(msg, "】")
-	if i >= 0 && j > i {
-		return msg[i+len("【") : j]
+	if parts := bracketsIn(msg); len(parts) > 0 {
+		return parts[0]
 	}
 	return ""
 }

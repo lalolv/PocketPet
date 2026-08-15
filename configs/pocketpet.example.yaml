@@ -53,7 +53,7 @@ mcp:
 plugins:
   adventure:
     enabled: true
-    # map_refresh_ticks: 60
+    # map_refresh_interval_seconds: 21600  # 自动换图墙钟秒数，默认 6 小时；<=0 关闭
     # node_count: 12
     # max_branches: 5
     # chest_min_pct: 0.15

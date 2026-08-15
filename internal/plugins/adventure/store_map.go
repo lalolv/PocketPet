@@ -3,6 +3,7 @@ package adventure
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -24,7 +25,9 @@ func (a *Adventure) ensureCurrentMap(ctx context.Context) error {
 		return err
 	}
 	if id != "" {
-		if _, err := a.loadMap(ctx, id); err == nil {
+		if sm, err := a.loadMap(ctx, id); err == nil {
+			a.ctx.Logger().Info("adventure: using existing map", "map_id", id,
+				"island", sm.Graph.IslandName, "nodes", len(sm.Graph.Nodes), "chests", sm.Graph.ChestCount())
 			return nil
 		}
 	}
@@ -32,11 +35,19 @@ func (a *Adventure) ensureCurrentMap(ctx context.Context) error {
 	return err
 }
 
+// refreshMap 换图：同步段生成拓扑 + 降级主题并立即落库（毫秒级，可阻塞 tick）；
+// 随后若配置了 Themer，起 goroutine 异步生成 LLM 主题并就地 UPDATE（见 upgradeTheme）。
 func (a *Adventure) refreshMap(ctx context.Context, now time.Time) (*StoredMap, error) {
 	if err := a.abortAllRuns(ctx, now); err != nil {
 		return nil, err
 	}
 	g := GenerateMap(a.genConfig())
+	req := a.themeRequest(g)
+	if th, err := (FallbackThemer{IntN: a.IntN}).ThemeIsland(ctx, req); err == nil {
+		applyTheme(&g, th)
+	} else {
+		a.ctx.Logger().Warn("adventure: fallback theme failed", "err", err)
+	}
 	id := fmt.Sprintf("map_%d", now.UnixNano())
 	sm := &StoredMap{ID: id, CreatedAt: now, Graph: g}
 	if err := a.saveMap(ctx, sm); err != nil {
@@ -45,11 +56,35 @@ func (a *Adventure) refreshMap(ctx context.Context, now time.Time) (*StoredMap, 
 	if err := a.setKV(kvCurrentMapID, id); err != nil {
 		return nil, err
 	}
-	if err := a.setKV(kvRefreshCounter, "0"); err != nil {
-		return nil, err
+	// 换图后旧图无任何引用（行程已在 abortAllRuns 清空），直接清掉避免累积。
+	if err := a.dropMapsExcept(id); err != nil {
+		a.ctx.Logger().Warn("adventure: drop old maps failed", "err", err)
 	}
-	a.ctx.Logger().Info("adventure: map refreshed", "map_id", id, "nodes", len(g.Nodes), "chests", g.ChestCount())
+	a.ctx.Logger().Info("adventure: map refreshed", "map_id", id, "island", g.IslandName,
+		"nodes", len(g.Nodes), "chests", g.ChestCount())
+	if a.Themer != nil {
+		a.themeWg.Add(1)
+		go a.upgradeTheme(id, req)
+	}
 	return sm, nil
+}
+
+// upgradeTheme 异步生成 LLM 主题并就地更新（不换图、不动拓扑与行程）。
+// 失败仅记日志，地图保持降级主题；下一次换图再试。
+func (a *Adventure) upgradeTheme(mapID string, req ThemeRequest) {
+	defer a.themeWg.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), themeTimeout)
+	defer cancel()
+	th, err := a.Themer.ThemeIsland(ctx, req)
+	if err != nil {
+		a.ctx.Logger().Warn("adventure: llm theme failed, keep fallback", "map_id", mapID, "err", err)
+		return
+	}
+	if err := a.updateMapTheme(mapID, th); err != nil {
+		a.ctx.Logger().Warn("adventure: save llm theme failed", "map_id", mapID, "err", err)
+		return
+	}
+	a.ctx.Logger().Info("adventure: island themed", "map_id", mapID, "island", th.IslandName)
 }
 
 func (a *Adventure) currentMap(ctx context.Context) (*StoredMap, error) {
@@ -71,8 +106,9 @@ func (a *Adventure) saveMap(ctx context.Context, sm *StoredMap) error {
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO adventure_maps (id, created_at, node_count) VALUES (?, ?, ?)`,
-		sm.ID, sm.CreatedAt.UTC().Format(time.RFC3339Nano), len(sm.Graph.Nodes)); err != nil {
+		`INSERT INTO adventure_maps (id, created_at, node_count, island_name, theme) VALUES (?, ?, ?, ?, ?)`,
+		sm.ID, sm.CreatedAt.UTC().Format(time.RFC3339Nano), len(sm.Graph.Nodes),
+		sm.Graph.IslandName, sm.Graph.Theme); err != nil {
 		return err
 	}
 	for _, n := range sm.Graph.Nodes {
@@ -80,9 +116,11 @@ func (a *Adventure) saveMap(ctx context.Context, sm *StoredMap) error {
 		if n.HasChest {
 			chest = 1
 		}
+		elements, _ := json.Marshal(n.Elements)
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO adventure_nodes (map_id, node_id, name, has_chest) VALUES (?, ?, ?, ?)`,
-			sm.ID, n.ID, n.Name, chest); err != nil {
+			`INSERT INTO adventure_nodes (map_id, node_id, name, has_chest, description, zone, elements)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			sm.ID, n.ID, n.Name, chest, n.Description, n.Zone, string(elements)); err != nil {
 			return err
 		}
 	}
@@ -97,11 +135,11 @@ func (a *Adventure) saveMap(ctx context.Context, sm *StoredMap) error {
 }
 
 func (a *Adventure) loadMap(ctx context.Context, mapID string) (*StoredMap, error) {
-	var created string
+	var created, islandName, theme string
 	var nodeCount int
 	err := a.db.QueryRowContext(ctx,
-		`SELECT created_at, node_count FROM adventure_maps WHERE id = ?`, mapID).
-		Scan(&created, &nodeCount)
+		`SELECT created_at, node_count, island_name, theme FROM adventure_maps WHERE id = ?`, mapID).
+		Scan(&created, &nodeCount, &islandName, &theme)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("adventure: map %s not found", mapID)
 	}
@@ -111,7 +149,7 @@ func (a *Adventure) loadMap(ctx context.Context, mapID string) (*StoredMap, erro
 	createdAt, _ := time.Parse(time.RFC3339Nano, created)
 
 	rows, err := a.db.QueryContext(ctx,
-		`SELECT node_id, name, has_chest FROM adventure_nodes WHERE map_id = ? ORDER BY node_id`, mapID)
+		`SELECT node_id, name, has_chest, description, zone, elements FROM adventure_nodes WHERE map_id = ? ORDER BY node_id`, mapID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,11 +157,13 @@ func (a *Adventure) loadMap(ctx context.Context, mapID string) (*StoredMap, erro
 	for rows.Next() {
 		var n MapNode
 		var chest int
-		if err := rows.Scan(&n.ID, &n.Name, &chest); err != nil {
+		var elements string
+		if err := rows.Scan(&n.ID, &n.Name, &chest, &n.Description, &n.Zone, &elements); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		n.HasChest = chest != 0
+		_ = json.Unmarshal([]byte(elements), &n.Elements)
 		nodes = append(nodes, n)
 	}
 	rows.Close()
@@ -153,8 +193,31 @@ func (a *Adventure) loadMap(ctx context.Context, mapID string) (*StoredMap, erro
 	return &StoredMap{
 		ID:        mapID,
 		CreatedAt: createdAt,
-		Graph:     MapGraph{Nodes: nodes, Edges: edges},
+		Graph:     MapGraph{IslandName: islandName, Theme: theme, Nodes: nodes, Edges: edges},
 	}, nil
+}
+
+// updateMapTheme 就地更新地图主题（异步 LLM 段落库用；不动拓扑与行程）。
+func (a *Adventure) updateMapTheme(mapID string, t *IslandTheme) error {
+	tx, err := a.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE adventure_maps SET island_name = ?, theme = ? WHERE id = ?`,
+		t.IslandName, t.Theme, mapID); err != nil {
+		return err
+	}
+	for _, loc := range t.Locations {
+		elements, _ := json.Marshal(loc.Elements)
+		if _, err := tx.Exec(
+			`UPDATE adventure_nodes SET name = ?, description = ?, zone = ?, elements = ?
+			 WHERE map_id = ? AND node_id = ?`,
+			loc.Name, loc.Description, loc.Zone, string(elements), mapID, loc.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (a *Adventure) abortAllRuns(ctx context.Context, now time.Time) error {
@@ -205,18 +268,21 @@ func (a *Adventure) setKV(key, value string) error {
 	return err
 }
 
-func (a *Adventure) bumpRefreshCounter() (int, error) {
-	raw, err := a.getKV(kvRefreshCounter)
+// dropMapsExcept 删除 keep 以外的全部地图及其节点/边（换图后清理旧图）。
+func (a *Adventure) dropMapsExcept(keep string) error {
+	tx, err := a.db.Begin()
 	if err != nil {
-		return 0, err
+		return err
 	}
-	n := 0
-	if raw != "" {
-		_, _ = fmt.Sscanf(raw, "%d", &n)
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM adventure_edges WHERE map_id != ?`,
+		`DELETE FROM adventure_nodes WHERE map_id != ?`,
+		`DELETE FROM adventure_maps WHERE id != ?`,
+	} {
+		if _, err := tx.Exec(q, keep); err != nil {
+			return err
+		}
 	}
-	n++
-	if err := a.setKV(kvRefreshCounter, fmt.Sprintf("%d", n)); err != nil {
-		return 0, err
-	}
-	return n, nil
+	return tx.Commit()
 }

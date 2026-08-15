@@ -27,28 +27,32 @@ const (
 )
 
 const (
-	defaultMapRefreshTicks = 60
-	defaultNodeCount       = 12
-	defaultMaxBranches     = 5
-	defaultChestMinPct     = 0.15
-	defaultChestMaxPct     = 0.25
-	defaultEnergyCost      = 15.0
-	defaultStepInterval    = 5 * time.Second // 与养成 tick（默认 60s）解耦，适合 TUI 观感
+	defaultMapRefreshInterval = 6 * time.Hour // 自动换图墙钟周期（docs/08 §9）
+	defaultNodeCount          = 12
+	defaultMaxBranches        = 5
+	defaultChestMinPct        = 0.15
+	defaultChestMaxPct        = 0.25
+	defaultEnergyCost         = 15.0
+	defaultStepInterval       = 5 * time.Second // 与养成 tick（默认 60s）解耦，适合 TUI 观感
+	themeTimeout              = 30 * time.Second
 
-	kvCurrentMapID   = "current_map_id"
-	kvRefreshCounter = "refresh_counter"
+	kvCurrentMapID = "current_map_id"
 )
 
 // Adventure 是探险插件实例。数值字段在 Init 前可覆盖。
 type Adventure struct {
-	MapRefreshTicks int
-	NodeCount       int
-	MaxBranches     int
-	ChestMinPct     float64
-	ChestMaxPct     float64
-	EnergyCost      float64
+	// MapRefreshInterval 是自动换图的墙钟周期；<=0 表示不自动换图。
+	MapRefreshInterval time.Duration
+	NodeCount          int
+	MaxBranches        int
+	ChestMinPct        float64
+	ChestMaxPct        float64
+	EnergyCost         float64
 	// StepInterval 是行程步进墙钟间隔；<=0 表示不启后台步进（单测可手动 advanceAllRuns）。
 	StepInterval time.Duration
+
+	// Themer 是 LLM 主题生成器（可选）；nil 或失败时地图保持降级词库主题。
+	Themer Themer
 
 	// IntN / Float64 可注入，保证单测确定性；nil 用全局 rand。
 	IntN    func(n int) int
@@ -58,21 +62,22 @@ type Adventure struct {
 	db         *sql.DB
 	tools      []adktool.Tool
 	stepCancel context.CancelFunc
-	stepMu     sync.Mutex // 串行化步进，避免与 start/换图交错
+	stepMu     sync.Mutex     // 串行化步进，避免与 start/换图交错
+	themeWg    sync.WaitGroup // 等待进行中的异步主题生成（Shutdown 用）
 }
 
 // New 创建默认参数的探险插件。
 func New() *Adventure {
 	return &Adventure{
-		MapRefreshTicks: defaultMapRefreshTicks,
-		NodeCount:       defaultNodeCount,
-		MaxBranches:     defaultMaxBranches,
-		ChestMinPct:     defaultChestMinPct,
-		ChestMaxPct:     defaultChestMaxPct,
-		EnergyCost:      defaultEnergyCost,
-		StepInterval:    defaultStepInterval,
-		IntN:            rand.IntN,
-		Float64:         rand.Float64,
+		MapRefreshInterval: defaultMapRefreshInterval,
+		NodeCount:          defaultNodeCount,
+		MaxBranches:        defaultMaxBranches,
+		ChestMinPct:        defaultChestMinPct,
+		ChestMaxPct:        defaultChestMaxPct,
+		EnergyCost:         defaultEnergyCost,
+		StepInterval:       defaultStepInterval,
+		IntN:               rand.IntN,
+		Float64:            rand.Float64,
 	}
 }
 
@@ -126,12 +131,13 @@ func (a *Adventure) Init(pctx plugin.PluginContext) error {
 	return nil
 }
 
-// Shutdown 实现 plugin.Shutdowner：停止步进循环。
+// Shutdown 实现 plugin.Shutdowner：停止步进循环，等待进行中的异步主题生成。
 func (a *Adventure) Shutdown(context.Context) error {
 	if a.stepCancel != nil {
 		a.stepCancel()
 		a.stepCancel = nil
 	}
+	a.themeWg.Wait()
 	return nil
 }
 

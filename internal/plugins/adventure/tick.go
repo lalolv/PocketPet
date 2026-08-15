@@ -9,18 +9,26 @@ import (
 	"github.com/lalolv/PocketPet/internal/petstate"
 )
 
-// OnTick 实现 plugin.TickHook：只负责地图刷新计数（跟养成 tick）。
+// OnTick 实现 plugin.TickHook：保证"有且只有一张活跃地图"（跟养成 tick 检查一次）。
+// 当前图缺失/损坏时立即自愈重建；否则按墙钟周期到期换图。
 // 行程步进由独立墙钟 StepInterval 驱动，避免默认 60s tick 导致一步一分钟。
+// 换图同步段只做拓扑生成 + 降级主题落库（毫秒级）；LLM 主题由 goroutine 异步升级。
 func (a *Adventure) OnTick(ctx context.Context, now time.Time) {
-	n, err := a.bumpRefreshCounter()
+	a.stepMu.Lock()
+	defer a.stepMu.Unlock()
+	sm, err := a.currentMap(ctx)
 	if err != nil {
-		a.ctx.Logger().Warn("adventure: refresh counter failed", "err", err)
-	} else if a.MapRefreshTicks > 0 && n >= a.MapRefreshTicks {
-		a.stepMu.Lock()
-		defer a.stepMu.Unlock()
+		// 自愈：当前图不可用（被删/损坏），立即重建，不等重启。
 		if _, err := a.refreshMap(ctx, now); err != nil {
-			a.ctx.Logger().Warn("adventure: map refresh failed", "err", err)
+			a.ctx.Logger().Warn("adventure: map heal failed", "err", err)
 		}
+		return
+	}
+	if a.MapRefreshInterval <= 0 || now.Sub(sm.CreatedAt) < a.MapRefreshInterval {
+		return
+	}
+	if _, err := a.refreshMap(ctx, now); err != nil {
+		a.ctx.Logger().Warn("adventure: map refresh failed", "err", err)
 	}
 }
 

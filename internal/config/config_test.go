@@ -223,7 +223,7 @@ func TestPluginsConfig(t *testing.T) {
 plugins:
   adventure:
     enabled: false
-    map_refresh_ticks: 5
+    map_refresh_interval_seconds: 300
     energy_cost: 20
   friends:
     enabled: true
@@ -239,8 +239,8 @@ plugins:
 	if !cfg.FriendsEnabled() {
 		t.Fatal("friends should stay enabled")
 	}
-	if cfg.Plugins.Adventure.MapRefreshTicks == nil || *cfg.Plugins.Adventure.MapRefreshTicks != 5 {
-		t.Fatalf("map_refresh_ticks = %+v", cfg.Plugins.Adventure.MapRefreshTicks)
+	if cfg.Plugins.Adventure.MapRefreshIntervalSeconds == nil || *cfg.Plugins.Adventure.MapRefreshIntervalSeconds != 300 {
+		t.Fatalf("map_refresh_interval_seconds = %+v", cfg.Plugins.Adventure.MapRefreshIntervalSeconds)
 	}
 	if cfg.Plugins.Adventure.EnergyCost == nil || *cfg.Plugins.Adventure.EnergyCost != 20 {
 		t.Fatalf("energy_cost = %+v", cfg.Plugins.Adventure.EnergyCost)

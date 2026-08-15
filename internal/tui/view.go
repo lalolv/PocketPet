@@ -168,7 +168,11 @@ func (m model) renderMain() string {
 		if loc == "" {
 			loc = "路上"
 		}
-		badge := fmt.Sprintf("（探险中·%s", loc)
+		badge := "（探险中"
+		if m.advIsland != "" {
+			badge += "·" + m.advIsland
+		}
+		badge += "·" + loc
 		if m.advChests > 0 {
 			badge += fmt.Sprintf("·宝箱×%d", m.advChests)
 		}
@@ -326,7 +330,7 @@ func (m model) renderSprite() string {
 	// 探险中：顶部滚动地图路径，底部提示。
 	if adventure {
 		body = append([]boxLine{{adventurePathBanner(m.frame), lineBanner}},
-			append(body, boxLine{adventureFooter(m.advNode, m.advChests), lineFooter})...)
+			append(body, boxLine{adventureFooter(m.advIsland, m.advNode, m.advChests), lineFooter})...)
 	}
 	// 环境行（仅无覆盖层时）：睡觉星光闪烁、开心音符漂浮。
 	if !celebrate && !adventure {
@@ -380,11 +384,14 @@ func sparklePattern(frame int) string {
 	return "· * · * ·"
 }
 
-// adventureFooter 探险卡片的底部提示行。
-func adventureFooter(node string, chests int) string {
+// adventureFooter 探险卡片的底部提示行（岛名·地点 + 宝箱计数）。
+func adventureFooter(island, node string, chests int) string {
 	footer := "→ 探险中"
 	if node != "" {
 		footer = "→ " + node
+		if island != "" {
+			footer = "→ " + island + "·" + node
+		}
 	}
 	if chests > 0 {
 		footer += fmt.Sprintf(" ★×%d", chests)

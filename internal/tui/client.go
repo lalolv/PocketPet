@@ -153,10 +153,33 @@ type AdventureRun struct {
 	PetID       string `json:"pet_id"`
 	Adventuring bool   `json:"adventuring"`
 	MapID       string `json:"map_id,omitempty"`
+	IslandName  string `json:"island_name,omitempty"`
 	NodeID      int    `json:"node_id,omitempty"`
 	NodeName    string `json:"node_name,omitempty"`
+	NodeDesc    string `json:"node_desc,omitempty"`
+	NodeZone    string `json:"node_zone,omitempty"`
 	Branches    int    `json:"branches,omitempty"`
 	ChestsFound []int  `json:"chests_found,omitempty"`
+}
+
+// MapNodeView 是当前地图的一个地点（插件 HTTP）。
+type MapNodeView struct {
+	ID          int      `json:"id"`
+	Name        string   `json:"name"`
+	HasChest    bool     `json:"has_chest"`
+	Description string   `json:"description,omitempty"`
+	Zone        string   `json:"zone,omitempty"`
+	Elements    []string `json:"elements,omitempty"`
+}
+
+// CurrentMap 是当前探险地图（含岛名/主题与地点主题，docs/08）。
+type CurrentMap struct {
+	MapID      string        `json:"map_id"`
+	IslandName string        `json:"island_name"`
+	Theme      string        `json:"theme"`
+	NodeCount  int           `json:"node_count"`
+	ChestCount int           `json:"chest_count"`
+	Nodes      []MapNodeView `json:"nodes"`
 }
 
 // StartAdventure 让宠物出发探险（POST /v1/plugins/adventure/pets/{id}/start）。
@@ -175,6 +198,15 @@ func (c *Client) GetAdventureRun(ctx context.Context, id string) (AdventureRun, 
 		return run, err
 	}
 	return run, nil
+}
+
+// GetCurrentMap 查询当前探险地图（岛名/地点主题；无地图或插件关闭时返回错误，调用方静默忽略）。
+func (c *Client) GetCurrentMap(ctx context.Context) (CurrentMap, error) {
+	var cm CurrentMap
+	if err := c.do(ctx, http.MethodGet, "/v1/plugins/adventure/maps/current", "", &cm); err != nil {
+		return cm, err
+	}
+	return cm, nil
 }
 
 // Chat 发送一句话并取回完整回复（无 LLM 时服务端走降级文案，同样有回复）。

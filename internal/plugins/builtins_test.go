@@ -2,6 +2,7 @@ package plugins_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/lalolv/PocketPet/internal/config"
 	"github.com/lalolv/PocketPet/internal/plugin"
@@ -25,8 +26,8 @@ func TestBuildDisabledAndOverrides(t *testing.T) {
 	cfg := config.Config{
 		Plugins: config.PluginsConfig{
 			Adventure: config.AdventurePluginConfig{
-				Enabled:         &off,
-				MapRefreshTicks: &refresh,
+				Enabled:                   &off,
+				MapRefreshIntervalSeconds: &refresh,
 			},
 			Friends: config.FriendsPluginConfig{
 				VisitAffinity: &visit,
@@ -48,7 +49,7 @@ func TestBuildDisabledAndOverrides(t *testing.T) {
 		t.Fatalf("Build both = %v", pluginNames(got))
 	}
 	adv, ok := got[0].(*adventure.Adventure)
-	if !ok || adv.MapRefreshTicks != 9 {
+	if !ok || adv.MapRefreshInterval != 9*time.Second {
 		t.Fatalf("adventure override = %#v", got[0])
 	}
 }

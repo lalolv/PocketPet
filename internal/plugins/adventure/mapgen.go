@@ -19,9 +19,12 @@ type GenConfig struct {
 }
 
 // MapGraph 是一张探险地图（有向无环图：地点 + 道路）。
+// IslandName/Theme 与节点的主题是叙事皮肤，由主题层回填（见 theme.go）。
 type MapGraph struct {
-	Nodes []MapNode
-	Edges []MapEdge
+	IslandName string
+	Theme      string
+	Nodes      []MapNode
+	Edges      []MapEdge
 }
 
 // MapNode 是地点节点。
@@ -29,6 +32,10 @@ type MapNode struct {
 	ID       int
 	Name     string
 	HasChest bool
+	// 主题皮肤（降级词库或 LLM 生成，均可为空——旧数据兼容）。
+	Description string
+	Zone        string
+	Elements    []string
 }
 
 // MapEdge 是道路（有向边）。
